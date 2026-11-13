@@ -1,0 +1,40 @@
+/* Result cards keep source text and engineering decisions readable at any width. */
+main{max-width:1320px}
+body>header{padding:24px max(24px,calc((100% - 1280px)/2))}
+.issue-list{display:grid;gap:20px}
+.issue-card{min-width:0;border:1px solid #d9e2ee;border-radius:12px;padding:20px;background:#fff;line-height:1.55}
+.issue-card .issue-heading{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:0;background:transparent;color:inherit}
+.issue-heading h4{margin:0;font-size:17px}
+.issue-level{padding:3px 10px;border-radius:6px;font-size:14px}
+.issue-level.sev-error{background:#fde9e7}
+.issue-level.sev-warning{background:#fff4cc;color:#805000}
+.issue-level.sev-info{background:#e8f1fb}
+.issue-code{font-family:Consolas,monospace;font-size:14px;overflow-wrap:anywhere}
+.issue-meta{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,1fr);gap:12px 24px;margin:16px 0;padding-bottom:16px;border-bottom:1px solid #e6eaf1}
+.issue-meta div,.issue-body>*,.issue-content{min-width:0}
+.issue-meta dt{color:#62738d;font-size:13px}
+.issue-meta dd{margin:3px 0 0;overflow-wrap:anywhere}
+.issue-body{display:grid;gap:24px}
+.issue-body-managed{grid-template-columns:minmax(0,1fr) minmax(280px,340px)}
+.issue-card h5{font-size:14px;margin:0 0 8px;color:#3c506e}
+.issue-text{white-space:pre-wrap;overflow-wrap:anywhere;margin:0 0 18px;font-size:15px}
+.issue-text:last-child{margin-bottom:0}
+.issue-decision{background:#f6f8fc;border-radius:8px;padding:16px}
+.issue-card .finding-editor{min-width:0;max-width:none}
+.finding-editor select,.finding-editor textarea{min-width:0;max-width:100%}
+.finding-editor button{max-width:100%;white-space:normal}
+.finding-audit,.finding-message,.finding-prior,.finding-updated,.filename-list,#selected,#status{overflow-wrap:anywhere}
+.filename-list{line-height:1.6}
+@media(max-width:900px){
+ .issue-body-managed{grid-template-columns:minmax(0,1fr)}
+ .issue-meta{grid-template-columns:minmax(0,1fr)}
+}
+@media(max-width:600px){
+ main{padding:0 10px;margin:16px auto}
+ .panel{padding:14px}
+ .issue-card{padding:14px}
+ .issue-decision{padding:12px}
+ .drop{padding:20px 12px}
+ .controls{gap:10px}
+ .controls a{overflow-wrap:anywhere;max-width:100%}
+}
