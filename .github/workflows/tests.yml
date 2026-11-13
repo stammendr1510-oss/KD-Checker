@@ -9,8 +9,12 @@ permissions:
 
 jobs:
   tests:
-    name: Python 3.13 tests
-    runs-on: ubuntu-latest
+    name: Python 3.13 tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     timeout-minutes: 10
     steps:
       - name: Check out repository
@@ -31,3 +35,4 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q
+
