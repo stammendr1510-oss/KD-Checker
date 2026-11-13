@@ -26,6 +26,8 @@ def pe3(pages, grid=True, frame_only=False, extra_mentions=False):
                 ys = (20, 50, 70, 70+len(rows)*50) if frame_only else (20, 50, *range(70, 71+len(rows)*50, 50))
                 for y in ys:
                     page.draw_line((50, y), (480, y))
+                for x in (50, 115, 420, 455, 480):
+                    page.draw_line((x, 20), (x, 70+len(rows)*50))
             for index, (notation, qty) in enumerate(rows):
                 top = 70+index*50
                 page.insert_text((60, top+18), notation, fontsize=6)
@@ -83,6 +85,70 @@ def test_distinct_designators_and_mentions_inside_one_cell_are_not_duplicates(ro
 
 def test_repeated_headers_descriptions_and_notes_are_not_position_cells():
     assert duplicate_codes(pe3([[('1KM1', 1), ('XT1', 1)]], extra_mentions=True)) == []
+
+
+def test_description_inside_legacy_search_window_is_not_a_position_duplicate():
+    with fitz.open() as pdf:
+        page = pdf.new_page(width=600, height=800)
+        for y in (70, 120, 170):
+            page.draw_line((50, y), (480, y))
+        for x in (50, 100, 420, 455, 480):
+            page.draw_line((x, 70), (x, 170))
+        for y in (90, 140):
+            # The actual designation cells are empty; this text is in description.
+            page.insert_text((108, y), '1KM1', fontsize=6)
+            page.insert_text((438, y), '1', fontsize=6)
+        content = pdf.tobytes()
+    assert duplicate_codes(content) == []
+
+
+def test_horizontal_rules_without_designator_column_borders_are_not_enough():
+    with fitz.open() as pdf:
+        page = pdf.new_page(width=600, height=800)
+        for y in (70, 120, 170):
+            page.draw_line((50, y), (480, y))
+        for y in (90, 140):
+            page.insert_text((60, y), '1KM1', fontsize=6)
+            page.insert_text((438, y), '1', fontsize=6)
+        content = pdf.tobytes()
+    assert duplicate_codes(content) == []
+
+
+def test_rectangular_cell_paths_are_supported_as_confirmed_borders():
+    with fitz.open() as pdf:
+        page = pdf.new_page(width=600, height=800)
+        for top in (70, 120):
+            page.draw_rect(fitz.Rect(50, top, 115, top+50))
+            page.insert_text((60, top+18), '1KM1', fontsize=6)
+            page.insert_text((438, top+18), '1', fontsize=6)
+        content = pdf.tobytes()
+    assert len(duplicate_codes(content)) == 1
+
+
+def test_filled_text_backgrounds_are_not_confirmed_table_borders():
+    with fitz.open() as pdf:
+        page = pdf.new_page(width=600, height=800)
+        for top in (70, 120):
+            page.draw_rect(fitz.Rect(50, top, 115, top+50), color=None, fill=(.9,.9,.9))
+            page.insert_text((60, top+18), '1KM1', fontsize=6)
+            page.insert_text((438, top+18), '1', fontsize=6)
+        content = pdf.tobytes()
+    assert duplicate_codes(content) == []
+
+
+def test_unread_fragment_outside_legacy_window_makes_duplicate_evidence_incomplete():
+    with fitz.open() as pdf:
+        page = pdf.new_page(width=600, height=800)
+        for y in (70, 120, 170):
+            page.draw_line((50, y), (480, y))
+        for x in (50, 115, 420, 455, 480):
+            page.draw_line((x, 70), (x, 170))
+        for y in (90, 140):
+            page.insert_text((60, y), '1KM1', fontsize=6)
+            page.insert_text((114, y), '2', fontsize=6)
+            page.insert_text((438, y), '1', fontsize=6)
+        content = pdf.tobytes()
+    assert duplicate_codes(content) == []
 
 
 @pytest.mark.parametrize('uncertain', [

@@ -155,6 +155,40 @@ def _duplicate_range_spelling_is_exact(notation):
                 return False
     return True
 
+def _duplicate_column_bounds(page, band):
+    """Require stroked borders of a narrow designator cell, not a text background."""
+    if not band:
+        return None
+    top, bottom = band
+    vertical, horizontal = [], []
+    for drawing in page.get_drawings():
+        if 's' not in drawing.get('type', ''):
+            continue
+        for item in drawing['items']:
+            if item[0] == 'l':
+                segments = [(item[1], item[2])]
+            elif item[0] == 're':
+                r = item[1]
+                segments = [(r.tl,r.tr),(r.bl,r.br),(r.tl,r.bl),(r.tr,r.br)]
+            else:
+                continue
+            for a, b in segments:
+                if abs(a.x-b.x)<.5 and min(a.y,b.y)<=top+.5 and max(a.y,b.y)>=bottom-.5:
+                    vertical.append((a.x+b.x)/2)
+                if abs(a.y-b.y)<.5:
+                    horizontal.append((min(a.x,b.x),max(a.x,b.x),(a.y+b.y)/2))
+    center = page.rect.width*(.09+.188)/2
+    before, after = [x for x in vertical if x<center], [x for x in vertical if x>center]
+    if not before or not after:
+        return None
+    left, right = max(before), min(after)
+    if right-left>page.rect.width*.15:
+        return None
+    if not all(any(x0<=left+.5 and x1>=right-.5 and abs(y-edge)<.5
+                   for x0,x1,y in horizontal) for edge in band):
+        return None
+    return left, right
+
 def get_spec_rows(pdf_bytes):
     """Read designator column and qty using original PDF word coordinates.
     Only rows with an identifiable numeric qty and designator are accepted.
@@ -183,10 +217,14 @@ def get_spec_rows(pdf_bytes):
                     raw = notation
                 if entries:
                     band = _row_band(qty, index, rules)
+                    bounds = _duplicate_column_bounds(page, band) if not unknown else None
+                    contained = bool(bounds and all(bounds[0]-.5<=t[0] and t[2]<=bounds[1]+.5 for t in des))
+                    complete = bool(bounds and all(t in des for t in words
+                        if bounds[0]<=t[0]<bounds[1] and band[0]<(t[1]+t[3])/2<band[1]))
                     rows.append({'page':pi+1,'source':raw,'quantity':int(w[4]),'entries':entries,'unknown':unknown,
                                  'row_band':band,
                                  'table_row':rules.index(band[0])+1 if band else None,
-                                 'duplicate_eligible':bool(band and band[0]>=50 and not unknown
+                                 'duplicate_eligible':bool(band and band[0]>=50 and contained and complete and not unknown
                                                            and _duplicate_range_spelling_is_exact(notation))})
     return rows
 
