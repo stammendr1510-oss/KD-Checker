@@ -43,9 +43,9 @@ def expand_notation(raw):
         out.update(left+str(i) for i in range(int(first),int(last)+1))
     return out, unknown
 
-def _row_rules(page):
+def _row_rules(page, column_left):
     """Horizontal rules crossing the designator column (PDF points)."""
-    left, right = page.rect.width*.09, page.rect.width*.188
+    left, right = column_left, page.rect.width*.188
     rules = set()
     for drawing in page.get_drawings():
         for item in drawing['items']:
@@ -58,6 +58,40 @@ def _row_rules(page):
                 if rect.x0 <= left and rect.x1 >= right:
                     rules.update((rect.y0, rect.y1))
     return sorted(rules)
+
+def _quantity_words(page, words):
+    """Use the quantity header's vertical borders to exclude numeric notes."""
+    left, right = page.rect.width*.70, page.rect.width*.79
+    headers = [w for w in words if left < w[0] < right
+               and w[1] < page.rect.height*.1 and w[4].casefold().rstrip('.') == 'кол']
+    if len(headers) == 1:
+        header = headers[0]
+        cx, cy = (header[0]+header[2])/2, (header[1]+header[3])/2
+        borders = set()
+        for drawing in page.get_drawings():
+            for item in drawing['items']:
+                if item[0] == 'l':
+                    a, b = item[1:3]
+                    if abs(a.x-b.x) < .5 and min(a.y,b.y) <= cy <= max(a.y,b.y):
+                        borders.add((a.x+b.x)/2)
+                elif item[0] == 're':
+                    rect = item[1]
+                    if rect.y0 <= cy <= rect.y1:
+                        borders.update((rect.x0, rect.x1))
+        before, after = [x for x in borders if x < cx], [x for x in borders if x > cx]
+        if before and after:
+            left, right = max(before), min(after)
+    candidates = sorted([w for w in words if left < w[0] < right and re.fullmatch(r'\d+', w[4])
+                         and w[1] < page.rect.height*.83], key=lambda w:(w[1],w[0]))
+    rows = []
+    for word in candidates:
+        if rows and abs(word[1]-rows[-1][1]) < 2:
+            # With no usable header, the leftmost number is the quantity;
+            # a second number to its right belongs to notes on the same row.
+            rows[-1] = min(rows[-1], word, key=lambda w:w[0])
+        else:
+            rows.append(word)
+    return rows
 
 def _cell_words(words, quantities, index, rules, previous):
     qty = quantities[index]
@@ -91,11 +125,10 @@ def get_spec_rows(pdf_bytes):
     with fitz.open(stream=pdf_bytes, filetype='pdf') as pdf:
         for pi, page in enumerate(pdf):
             words=page.get_text('words',sort=True)
-            qty=[w for w in words if page.rect.width*.70 < w[0] < page.rect.width*.79 and re.fullmatch(r'\d+',w[4]) and w[1]<page.rect.height*.83]
-            # Some tables use different x alignment, but the supplied sample uses 0.73W.
-            qty.sort(key=lambda w:w[1]); previous=50
+            qty = _quantity_words(page, words)
+            previous=50
             column=[t for t in words if page.rect.width*.09 <= t[0] < page.rect.width*.188 and t[1]<page.rect.height*.83]
-            rules = _row_rules(page)
+            rules = _row_rules(page, min((w[0] for w in column), default=page.rect.width*.09))
             for index, w in enumerate(qty):
                 des, previous = _cell_words(column, qty, index, rules, previous)
                 # PDF block/line identifiers preserve wrapped fragments without
