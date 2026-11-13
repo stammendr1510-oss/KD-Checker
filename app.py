@@ -6,13 +6,14 @@ import json
 import re
 from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from extractors import SUPPORTED, extract
 from engine import analyze
 from kd_crosscheck import designation_type, pair_key, run as crosscheck
 from storage import get_run, list_runs, save_run
+from excel_reports import build_excel_report
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config.json"
@@ -127,6 +128,19 @@ def export_csv(run_id: int):
     data = "\ufeff" + out.getvalue()
     return StreamingResponse(iter([data.encode("utf-8")]), media_type="text/csv; charset=utf-8", headers={"Content-Disposition":f'attachment; filename="kd-report-{run_id}.csv"'})
 
+@app.get("/api/runs/{run_id}/xlsx")
+def export_excel(run_id: int):
+    r = get_run(run_id)
+    if r is None:
+        raise HTTPException(404, "Проверка не найдена")
+    return Response(
+        content=build_excel_report(r),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="kd-report-{run_id}.xlsx"'},
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8765)
+
