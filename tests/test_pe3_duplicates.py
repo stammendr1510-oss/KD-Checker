@@ -240,6 +240,7 @@ def test_multiple_scheme_pairs_do_not_duplicate_pe3_warnings(monkeypatch):
     codes = [issue['code'] for issue in response.json()['issues']]
     assert codes.count('KD-PE-104') == 1
     assert codes.count('KD-PE-100') == 2
+    assert codes.count('KD-SET-102') == 1  # Duplicate E3 upload, independent of PE3 detection.
 
 
 def test_standalone_pe3_decisions_history_recheck_and_exports(tmp_path, monkeypatch):
