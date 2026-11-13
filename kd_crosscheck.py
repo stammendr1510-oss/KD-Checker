@@ -164,12 +164,12 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes):
     # split representations and OCR/text-order artifacts.
     for r in rows:
         if not r['unknown'] and len(r['entries'])>1 and len(r['entries'])!=r['quantity']:
-            findings.append(issue('info','KD-PE-102',pe_filename,f"Лист {r['page']}",f"Для дополнительной проверки: количество {r['quantity']} отличается от числа распознанных обозначений ({len(r['entries'])}) в записи «{r['source']}»",'Это не подтверждённая ошибка: проверьте исходную таблицу и переносы строк'))
+            findings.append(issue('warning','KD-PE-102',pe_filename,f"Лист {r['page']}",f"Для дополнительной проверки: количество {r['quantity']} отличается от числа распознанных обозначений ({len(r['entries'])}) в записи «{r['source']}»",'Требуется проверка инженером: сопоставьте количество и явно указанные обозначения в исходной строке ПЭ3, включая переносы и диапазоны. Это не подтверждённая ошибка КД.'))
     for code,forms in sorted(script_candidates.items()):
         if len(forms)>1 and any(any('А'<=c<='я' for c in s) for s in forms):
             findings.append(issue('warning','KD-PE-103',e3_filename,'Обозначения в Э3',f"Смешение похожих латинских и кириллических букв: {', '.join(sorted(forms))}",'Унифицируйте алфавит в исходном проекте; проверьте, не разные ли это объекты'))
     overlap=sorted(spec & scheme)
-    findings.append(issue('info','KD-PE-100',pe_filename,'Сопоставление Э3 ↔ ПЭ3',f'Из ПЭ3 извлечено {len(rows)} строк с обозначениями и количеством; уникальных обозначений — {len(spec)}. Из текста Э3 распознано {len(scheme)} обозначений; совпадений — {len(overlap)}.','Это выборочная машинная сверка: отсутствие замечаний не подтверждает полноту схем и перечня'))
+    findings.append(issue('info','KD-PE-100',pe_filename,'Сопоставление Э3 ↔ ПЭ3',f'Из ПЭ3 извлечено {len(rows)} строк с обозначениями и количеством; уникальных обозначений — {len(spec)}. Из текста Э3 распознано {len(scheme)} обозначений; совпадений — {len(overlap)}.','Для проверки полноты сопоставьте исходные Э3 и ПЭ3 или структурированный экспорт проекта. Это выборочная машинная сверка: отсутствие замечаний не подтверждает полноту схем и перечня'))
     missing=sorted(spec-scheme)
     if missing:
         findings.append(issue('info','KD-PE-101',pe_filename,'Ограничения анализа',f'{len(missing)} обозначений ПЭ3 не подтверждены по извлечённому тексту Э3 (примеры: {", ".join(missing[:8])}). Это не считается ошибкой КД.','Для достоверной проверки использовать структурированный экспорт проекта EPLAN или проверить графику вручную'))
