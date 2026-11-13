@@ -4,15 +4,18 @@ import csv
 import io
 import json
 import re
+from typing import Literal
 from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from extractors import SUPPORTED, extract
 from engine import analyze
 from kd_crosscheck import designation_type, pair_key, run as crosscheck
-from storage import get_run, list_runs, save_run
+from storage import (get_run, list_runs, save_run, update_finding, finding_history,
+                     FindingConflict, FindingNotFound)
+from issue_tracking import MAX_COMMENT, validate_decision
 from excel_reports import build_excel_report
 
 ROOT = Path(__file__).resolve().parent
@@ -34,6 +37,18 @@ class ConfigUpdate(BaseModel):
     check_specification_references: bool
     check_duplicate_positions: bool
     warn_empty_dxf: bool
+
+
+class FindingUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    status: Literal['new', 'in_progress', 'resolved', 'rejected']
+    comment: str = Field(max_length=MAX_COMMENT)
+    expected_version: int = Field(ge=0, strict=True)
+
+    @model_validator(mode='after')
+    def validate_status(self):
+        validate_decision(self.status, self.comment)
+        return self
 
 
 def load_cfg():
@@ -128,6 +143,24 @@ def export_csv(run_id: int):
     data = "\ufeff" + out.getvalue()
     return StreamingResponse(iter([data.encode("utf-8")]), media_type="text/csv; charset=utf-8", headers={"Content-Disposition":f'attachment; filename="kd-report-{run_id}.csv"'})
 
+@app.patch('/api/runs/{run_id}/findings/{finding_id}')
+def change_finding(run_id: int, finding_id: int, change: FindingUpdate):
+    try:
+        return update_finding(run_id, finding_id, change.status, change.comment, change.expected_version)
+    except FindingNotFound:
+        raise HTTPException(404, 'Замечание не найдено в этой проверке')
+    except FindingConflict:
+        raise HTTPException(409, 'Замечание уже изменено. Откройте проверку заново и сравните изменения перед сохранением')
+
+
+@app.get('/api/runs/{run_id}/findings/{finding_id}/history')
+def get_finding_history(run_id: int, finding_id: int):
+    try:
+        return finding_history(run_id, finding_id)
+    except FindingNotFound:
+        raise HTTPException(404, 'Замечание не найдено в этой проверке')
+
+
 @app.get("/api/runs/{run_id}/xlsx")
 def export_excel(run_id: int):
     r = get_run(run_id)
@@ -143,4 +176,5 @@ def export_excel(run_id: int):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8765)
+
 

@@ -40,16 +40,16 @@ def test_workbook_contents_and_format(saved_run):
             ('Ошибки', 1), ('Предупреждения', 2), ('Информационные сообщения', 1),
         ]
         assert list(general.values)[9:] == [(1, 'demo.pdf'), (2, 'sample.csv')]
-        assert list(findings.values)[0] == ('№', 'Уровень', 'Код', 'Документ', 'Лист/место', 'Описание', 'Рекомендация')
+        assert list(findings.values)[0] == ('№', 'Уровень', 'Код', 'Документ', 'Лист/место', 'Описание', 'Рекомендация', 'Статус', 'Комментарий инженера', 'Дата изменения')
         assert list(findings.values)[1] == (
             1, 'Ошибка', 'TEST-1', 'demo.pdf', 'Лист 1',
-            'Искусственное замечание 1\nВторая строка', 'Проверить тестовые данные',
+            'Искусственное замечание 1\nВторая строка', 'Проверить тестовые данные', 'Новое', None, None,
         )
         assert [row[1] for row in list(findings.values)[1:]] == [
             'Ошибка', 'Предупреждение', 'Информация', 'Предупреждение',
         ]
         assert [row[0] for row in list(findings.values)[1:]] == [1, 2, 3, 4]
-        assert findings.auto_filter.ref == 'A1:G5'
+        assert findings.auto_filter.ref == 'A1:J5'
         assert general.auto_filter.ref == 'A9:B11'
         assert general.freeze_panes == findings.freeze_panes == 'A2'
         assert findings['A1'].font.bold
@@ -75,10 +75,11 @@ def test_all_text_fields_are_literal_strings(saved_run, payload):
     saved_run['issues'] = [{key: payload for key in (
         'severity', 'code', 'file', 'location', 'message', 'recommendation',
     )}]
+    saved_run['finding_states'] = [{'issue_index': 0, 'status': 'new', 'comment': payload, 'updated_at': payload}]
     content = build_excel_report(saved_run)
     with closing(load_workbook(BytesIO(content), data_only=False)) as book:
         cells = [book['Общие сведения']['B3'], book['Общие сведения']['B10']]
-        cells += list(book['Замечания'][2])[1:]
+        cells += list(book['Замечания'][2])[1:7] + list(book['Замечания'][2])[8:]
         expected = payload.replace('\r\n', '\n').replace('\r', '\n')
         assert all(cell.value == expected and cell.data_type == 's' for cell in cells)
         assert all(cell.hyperlink is None for cell in cells)
@@ -103,7 +104,7 @@ def test_empty_check_still_has_usable_headers(saved_run):
         general, findings = book.worksheets
         assert [general.cell(row, 2).value for row in range(4, 8)] == [0, 0, 0, 0]
         assert findings.max_row == 1
-        assert findings.auto_filter.ref == 'A1:G1'
+        assert findings.auto_filter.ref == 'A1:J1'
         assert general.auto_filter.ref == 'A9:B9'
 
 
@@ -132,3 +133,4 @@ def test_download_from_persisted_history_and_csv_compatibility(tmp_path, monkeyp
         assert len(rows) == len(saved_run['issues']) + 1
         assert client.get('/api/runs/999/xlsx').status_code == 404
         assert client.get('/api/runs/999/csv').status_code == 404
+

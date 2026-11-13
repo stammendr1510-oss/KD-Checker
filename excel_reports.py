@@ -5,6 +5,7 @@ from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from issue_tracking import STATUS_LABELS
 
 
 LEVELS = {
@@ -12,7 +13,8 @@ LEVELS = {
     'warning': ('Предупреждение', 'FFF4CC'),
     'info': ('Информация', 'E8F1FB'),
 }
-HEADERS = ['№', 'Уровень', 'Код', 'Документ', 'Лист/место', 'Описание', 'Рекомендация']
+HEADERS = ['№', 'Уровень', 'Код', 'Документ', 'Лист/место', 'Описание', 'Рекомендация',
+           'Статус', 'Комментарий инженера', 'Дата изменения']
 
 
 def _text(cell, value):
@@ -61,19 +63,24 @@ def build_excel_report(run):
 
     findings = workbook.create_sheet('Замечания')
     findings.append(HEADERS)
+    states = {state['issue_index']: state for state in run.get('finding_states', [])}
     for index, item in enumerate(run['issues'], 1):
         label, color = LEVELS.get(item['severity'], (item['severity'], 'FFFFFF'))
         findings.append([index])
         values = [label] + [item.get(key, '') for key in ('code', 'file', 'location', 'message', 'recommendation')]
+        state = states.get(index-1, {})
+        values += [STATUS_LABELS.get(state.get('status', 'new'), 'Новое'),
+                   state.get('comment', ''), state.get('updated_at') or '']
         for column, value in enumerate(values, 2):
             cell = findings.cell(index+1, column)
             _text(cell, value)
             cell.fill = PatternFill('solid', fgColor=color)
         findings.cell(index+1, 1).fill = PatternFill('solid', fgColor=color)
-    findings.auto_filter.ref = f'A1:G{max(1, findings.max_row)}'
-    _format_sheet(findings, [7, 20, 18, 38, 24, 80, 80])
+    findings.auto_filter.ref = f'A1:J{max(1, findings.max_row)}'
+    _format_sheet(findings, [7, 20, 18, 38, 24, 80, 80, 32, 70, 36])
     findings.print_title_rows = '1:1'
     output = BytesIO()
     workbook.save(output)
     workbook.close()
     return output.getvalue()
+
