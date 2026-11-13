@@ -1,0 +1,12 @@
+{
+  "require_designation_in_filename": true,
+  "designation_pattern": "[A-Za-zА-Яа-яЁё0-9]+(?:[._-][A-Za-zА-Яа-яЁё0-9]+){1,}",
+  "detect_duplicate_designations": true,
+  "require_pdf_text": true,
+  "min_pdf_text_chars": 25,
+  "require_excel_headers": true,
+  "specification_headers": ["позиция", "обозначение", "наименование"],
+  "check_specification_references": true,
+  "check_duplicate_positions": true,
+  "warn_empty_dxf": true
+}
