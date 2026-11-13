@@ -6,8 +6,6 @@ findings, logs or SQLite. This is a screening hint, not document versioning.
 from collections import defaultdict
 from hashlib import sha256
 
-from kd_crosscheck import designation_type, pair_key
-
 CODE = "KD-SET-102"
 
 
