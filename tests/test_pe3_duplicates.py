@@ -202,7 +202,7 @@ def test_api_does_not_mix_documents_or_scheme_mentions(monkeypatch):
     assert result['summary'] == dict(error=0, warning=0, info=2)
     assert [item['code'] for item in result['issues']] == ['KD-SET-101', 'KD-PE-100']
     assert result['issues'][0]['file'] == 'other.ПЭ3.pdf'
-    assert 'совпадений — 1' in result['issues'][0]['message']
+    assert 'совпадений — 1' in result['issues'][1]['message']
 
 
 @pytest.mark.parametrize('wrapped', [False, True])
