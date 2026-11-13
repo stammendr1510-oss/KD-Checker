@@ -6,7 +6,8 @@ from pathlib import Path
 import fitz
 
 # Identify components in the electrical scheme primarily from unambiguous wire tags.
-TAG = re.compile(r'(?<![\w.])(?:[123])?(?:QF|SF|KM|KK|KV|KT|TA|SB|HLG|HLW|XG|XT|XN|XL|X|PAV)\d+(?:\.\d+)?(?=\s*:|\b)', re.I)
+TAG_PREFIX = r'(?:[123])?(?:QF|SF|KM|KK|KV|KT|TA|SB|HLG|HLW|XG|XT|XN|XL|X|PAV)'
+TAG = re.compile(r'(?<![\w.])'+TAG_PREFIX+r'\d+(?:\.\d+)?(?=\s*:|\b)', re.I)
 RANGE = re.compile(r'^([\d]*[A-ZА-Я]+)(\d+)\.{2,3}([\d]*[A-ZА-Я]+)?(\d+)$', re.I)
 CYR_LOOKALIKES = str.maketrans('АВСЕНКМОРТХУавсенкмортху', 'ABCEHKMOPTXYaBcehkmoptxy')
 
@@ -24,11 +25,26 @@ def pair_key(name):
 def issue(level, code, file, place, message, recommendation):
     return {'severity':level, 'code':code, 'file':file, 'location':place, 'message':message, 'recommendation':recommendation}
 
+def _notation_part(raw):
+    """Join incomplete fragments; never append digits to a complete notation."""
+    fragments = [part.replace('…','...') for part in re.split(r'\s+', raw.strip()) if part]
+    joined = ''
+    for line in fragments:
+        left = normalized(joined)
+        if joined and (TAG.fullmatch(left) or RANGE.fullmatch(left)) and not line.startswith('.'):
+            return None
+        joined += line
+    return normalized(joined)
+
+
 def expand_notation(raw):
-    raw = re.sub(r'\s+', '', raw).replace('…','...')
     out, unknown = set(), []
     for part in raw.split(';'):
-        part = normalized(part)
+        original = part
+        part = _notation_part(part)
+        if part is None:
+            unknown.append(original.strip())
+            continue
         if not part: continue
         if '..' not in part:
             if TAG.fullmatch(part): out.add(part)
@@ -138,10 +154,55 @@ def get_spec_rows(pdf_bytes):
                     lines[(t[5],t[6])].append(t)
                 ordered = sorted(lines.values(), key=lambda line:(min(t[1] for t in line), min(t[0] for t in line)))
                 raw='\n'.join(''.join(t[4] for t in sorted(line,key=lambda t:t[0])) for line in ordered)
-                entries,unknown=expand_notation(raw)
+                # Word gaps also matter: XT1 and 2 must not silently become XT12.
+                notation='\n'.join(' '.join(t[4] for t in sorted(line,key=lambda t:t[0])) for line in ordered)
+                entries,unknown=expand_notation(notation)
+                if unknown:
+                    raw = notation
                 if entries:
                     rows.append({'page':pi+1,'source':raw,'quantity':int(w[4]),'entries':entries,'unknown':unknown})
     return rows
+
+def _separated_by_rule(page, a, b):
+    left, right = min(a[0], b[0]), max(a[2], b[2])
+    top, bottom = (a[1]+a[3])/2, (b[1]+b[3])/2
+    for drawing in page.get_drawings():
+        for item in drawing['items']:
+            if item[0] == 'l':
+                p, q = item[1:3]
+                if abs(p.y-q.y) < .5 and top < (p.y+q.y)/2 < bottom and min(p.x,q.x) <= left and max(p.x,q.x) >= right:
+                    return True
+            elif item[0] == 're':
+                rect = item[1]
+                if rect.x0 <= left and rect.x1 >= right and any(top < y < bottom for y in (rect.y0,rect.y1)):
+                    return True
+    return False
+
+
+def scheme_designations(page):
+    """Recover only an incomplete prefix + numeric suffix in adjacent PDF lines.
+    Standalone complete labels, different blocks, columns and pages stay separate.
+    """
+    yield from (m.group(0) for m in TAG.finditer(page.get_text()))
+    blocks = defaultdict(lambda: defaultdict(list))
+    for word in page.get_text('words', sort=True):
+        blocks[word[5]][word[6]].append(word)
+    for lines in blocks.values():
+        ordered = sorted(lines.values(), key=lambda words:min(w[1] for w in words))
+        if len(ordered) != 2:
+            continue
+        first, second = ordered
+        if len(first) != 1 or len(second) != 1:
+            continue
+        a, b = first[0], second[0]
+        if not re.fullmatch(r'[123]?[A-Z]+', a[4], re.I) or not re.fullmatch(r'[A-Z]*\d+(?:\.\d+)?', b[4], re.I):
+            continue
+        height = max(a[3]-a[1], b[3]-b[1])
+        if abs(a[0]-b[0]) > 2 or not (0 < b[1]-a[1] <= height*1.6):
+            continue
+        candidate = a[4]+b[4]
+        if TAG.fullmatch(candidate) and not _separated_by_rule(page, a, b):
+            yield candidate
 
 def run(e3_filename,e3_bytes,pe_filename,pe_bytes):
     findings=[]
@@ -151,9 +212,7 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes):
     scheme=set(); script_candidates=defaultdict(set)
     with fitz.open(stream=e3_bytes, filetype='pdf') as pdf:
         for pi,page in enumerate(pdf):
-            text=page.get_text()
-            for m in TAG.finditer(text):
-                value=m.group(0)
+            for value in scheme_designations(page):
                 n=normalized(value)
                 scheme.add(n)
                 script_candidates[n].add(value)
@@ -174,4 +233,5 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes):
     if missing:
         findings.append(issue('info','KD-PE-101',pe_filename,'Ограничения анализа',f'{len(missing)} обозначений ПЭ3 не подтверждены по извлечённому тексту Э3 (примеры: {", ".join(missing[:8])}). Это не считается ошибкой КД.','Для достоверной проверки использовать структурированный экспорт проекта EPLAN или проверить графику вручную'))
     return findings
+
 
