@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from extractors import SUPPORTED, extract
 from engine import analyze
-from kd_crosscheck import designation_type, pair_key, run as crosscheck
+from kd_crosscheck import designation_type, pair_key, run as crosscheck, check_spec_duplicates
 from storage import (get_run, list_runs, save_run, update_finding, finding_history,
                      FindingConflict, FindingNotFound)
 from issue_tracking import MAX_COMMENT, validate_decision
@@ -105,6 +105,9 @@ async def check(files: list[UploadFile] = File(...)):
     if not docs and not errors:
         raise HTTPException(400, "Выберите файлы")
     issues = analyze(docs, load_cfg())
+    for pe_name, pe_kind, _, pe_content in pdf_sources:
+        if pe_kind == 'ПЭ3':
+            issues.extend(check_spec_duplicates(pe_name, pe_content))
     for name, kind, key, content in pdf_sources:
         if kind != "Э3":
             continue
