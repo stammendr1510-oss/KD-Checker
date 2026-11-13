@@ -16,6 +16,8 @@ def unpaired_document_findings(pdf_names):
     groups = defaultdict(lambda: defaultdict(list))
     kinds = set()
     for name in pdf_names:
+        if not name.casefold().endswith('.pdf'):
+            continue
         kind = designation_type(name)
         if kind not in ("Э3", "ПЭ3"):
             continue
