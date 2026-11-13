@@ -109,7 +109,8 @@ def _quantity_words(page, words):
             rows.append(word)
     return rows
 
-def _cell_words(words, quantities, index, rules, previous):
+def _row_band(quantities, index, rules):
+    """A distinct grid cell containing exactly one quantity anchor, if known."""
     qty = quantities[index]
     center = (qty[1]+qty[3])/2
     above = [y for y in rules if y < center]
@@ -118,7 +119,17 @@ def _cell_words(words, quantities, index, rules, previous):
         top, bottom = above[-1], below[0]
         # A border around the whole table is not a row boundary.
         if sum(top < (q[1]+q[3])/2 < bottom for q in quantities) == 1:
-            return [w for w in words if top < (w[1]+w[3])/2 < bottom], bottom
+            return top, bottom
+    return None
+
+
+def _cell_words(words, quantities, index, rules, previous):
+    qty = quantities[index]
+    center = (qty[1]+qty[3])/2
+    band = _row_band(quantities, index, rules)
+    if band:
+        top, bottom = band
+        return [w for w in words if top < (w[1]+w[3])/2 < bottom], bottom
 
     # Without a grid, extend only within a PDF text block that intersects
     # this quantity and no other quantity. Never join arbitrary nearby lines.
@@ -132,6 +143,51 @@ def _cell_words(words, quantities, index, rules, previous):
             selected.extend(w for w in cell if w not in selected)
     last = max((w[1] for w in selected), default=qty[1])
     return selected, max(qty[1], last)+9
+
+def _duplicate_range_spelling_is_exact(notation):
+    # The legacy range expander converts numbers to int. For duplicate evidence
+    # do not equate a padded source like KM01...KM03 with a separate KM1.
+    for part in notation.split(';'):
+        match = RANGE.fullmatch(_notation_part(part) or '')
+        if match:
+            _, first, _, last = match.groups()
+            if str(int(first)) != first or str(int(last)) != last:
+                return False
+    return True
+
+def _duplicate_column_bounds(page, band):
+    """Require stroked borders of a narrow designator cell, not a text background."""
+    if not band:
+        return None
+    top, bottom = band
+    vertical, horizontal = [], []
+    for drawing in page.get_drawings():
+        if 's' not in drawing.get('type', ''):
+            continue
+        for item in drawing['items']:
+            if item[0] == 'l':
+                segments = [(item[1], item[2])]
+            elif item[0] == 're':
+                r = item[1]
+                segments = [(r.tl,r.tr),(r.bl,r.br),(r.tl,r.bl),(r.tr,r.br)]
+            else:
+                continue
+            for a, b in segments:
+                if abs(a.x-b.x)<.5 and min(a.y,b.y)<=top+.5 and max(a.y,b.y)>=bottom-.5:
+                    vertical.append((a.x+b.x)/2)
+                if abs(a.y-b.y)<.5:
+                    horizontal.append((min(a.x,b.x),max(a.x,b.x),(a.y+b.y)/2))
+    center = page.rect.width*(.09+.188)/2
+    before, after = [x for x in vertical if x<center], [x for x in vertical if x>center]
+    if not before or not after:
+        return None
+    left, right = max(before), min(after)
+    if right-left>page.rect.width*.15:
+        return None
+    if not all(any(x0<=left+.5 and x1>=right-.5 and abs(y-edge)<.5
+                   for x0,x1,y in horizontal) for edge in band):
+        return None
+    return left, right
 
 def get_spec_rows(pdf_bytes):
     """Read designator column and qty using original PDF word coordinates.
@@ -160,8 +216,49 @@ def get_spec_rows(pdf_bytes):
                 if unknown:
                     raw = notation
                 if entries:
-                    rows.append({'page':pi+1,'source':raw,'quantity':int(w[4]),'entries':entries,'unknown':unknown})
+                    band = _row_band(qty, index, rules)
+                    bounds = _duplicate_column_bounds(page, band) if not unknown else None
+                    contained = bool(bounds and all(bounds[0]-.5<=t[0] and t[2]<=bounds[1]+.5 for t in des))
+                    complete = bool(bounds and all(t in des for t in words
+                        if bounds[0]<=t[0]<bounds[1] and band[0]<(t[1]+t[3])/2<band[1]))
+                    rows.append({'page':pi+1,'source':raw,'quantity':int(w[4]),'entries':entries,'unknown':unknown,
+                                 'row_band':band,
+                                 'table_row':rules.index(band[0])+1 if band else None,
+                                 'duplicate_eligible':bool(band and band[0]>=50 and contained and complete and not unknown
+                                                           and _duplicate_range_spelling_is_exact(notation))})
     return rows
+
+
+def duplicate_findings(rows, filename):
+    """Compare complete, grid-confirmed rows of ONE PE3, never E3 mentions."""
+    occurrences = defaultdict(dict)
+    for row in rows:
+        if not row.get('duplicate_eligible') or row['unknown']:
+            continue
+        # Multiple textual mentions or quantity anchors in a cell are not new rows.
+        cell = (row['page'], *row['row_band'])
+        for designation in row['entries']:
+            occurrences[designation][cell] = row
+    findings = []
+    for designation, cells in sorted(occurrences.items()):
+        if len(cells) < 2:
+            continue
+        locations = [f"Лист {row['page']}, строка таблицы {row['table_row']}"
+                     for _, row in sorted(cells.items())]
+        findings.append(issue(
+            'warning', 'KD-PE-104', filename, '; '.join(locations),
+            f'Для проверки инженером: обозначение «{designation}» распознано в {len(cells)} разных строках одного ПЭ3.',
+            'Сопоставьте исходные ячейки перечня. Номера строк определены по горизонтальным границам таблицы, '
+            'включая заголовок и пустые строки. Повтор может относиться к продолжению записи или особенностям '
+            'комплектования; это не подтверждённая ошибка КД.',
+        ))
+    return findings
+
+
+def check_spec_duplicates(filename, pdf_bytes):
+    """Standalone PE3 validation; caller supplies a single document's bytes."""
+    return duplicate_findings(get_spec_rows(pdf_bytes), filename)
+
 
 def _separated_by_rule(page, a, b):
     left, right = min(a[0], b[0]), max(a[2], b[2])
