@@ -253,3 +253,29 @@ def test_xlsx_does_not_claim_outage_was_verified(tmp_path, monkeypatch):
         assert sheet["B3"].value == "Невозможно подключиться"
         assert sheet.max_row == 7
         assert sheet["A8"].value is None
+
+
+def test_ui_escapes_optional_checklist_comments_and_sources():
+    from pathlib import Path
+    html = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text("utf-8")
+    assert "esc(item.comment)" in html
+    assert "esc(item.url)" in html
+    assert "href=\"'+item.url" not in html
+
+
+def test_xlsx_preserves_comments_and_urls_as_plain_text(tmp_path, monkeypatch):
+    from io import BytesIO
+    from contextlib import closing
+    from openpyxl import load_workbook
+    from excel_reports import build_excel_report
+    monkeypatch.setattr(storage, "DB", tmp_path / "history.sqlite3")
+    source = sample_state()
+    source["reviews"][0]["comment"] = "=2+2"
+    source["reviews"][0]["url"] = "javascript:alert(1)"
+    run_id = storage.save_run(["synthetic.pdf"], [], checklist=source)
+    with closing(load_workbook(BytesIO(build_excel_report(storage.get_run(run_id))))) as book:
+        sheet = book["EPLAN Checklist"]
+        assert sheet["F8"].value == "=2+2"
+        assert sheet["F8"].data_type == "s"
+        assert sheet["G8"].value == "javascript:alert(1)"
+        assert sheet["G8"].hyperlink is None
