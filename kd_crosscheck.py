@@ -306,13 +306,14 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes):
     rows=get_spec_rows(pe_bytes)
     if not rows:
         return [issue('warning','KD-PE-000',pe_filename,'PDF','Не удалось надёжно извлечь строки перечня элементов','Используйте структурированную выгрузку или Excel для точной сверки')]
-    scheme=set(); script_candidates=defaultdict(set)
+    scheme=set(); script_candidates=defaultdict(set); scheme_pages=defaultdict(set)
     with fitz.open(stream=e3_bytes, filetype='pdf') as pdf:
         for pi,page in enumerate(pdf):
             for value in scheme_designations(page):
                 n=normalized(value)
                 scheme.add(n)
                 script_candidates[n].add(value)
+                scheme_pages[n].add(pi+1)
                 if len(script_candidates[n])>1 and any(any('А'<=c<='я' for c in form) for form in script_candidates[n]):
                     pass
     spec=set().union(*(r['entries'] for r in rows))
@@ -330,7 +331,16 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes):
         if len(forms)>1 and any(any('А'<=c<='я' for c in s) for s in forms):
             findings.append(issue('warning','KD-PE-103',e3_filename,'Обозначения в Э3',f"Смешение похожих латинских и кириллических букв: {', '.join(sorted(forms))}",'Унифицируйте алфавит в исходном проекте; проверьте, не разные ли это объекты'))
     overlap=sorted(spec & scheme)
-    findings.append(issue('info','KD-PE-100',pe_filename,'Сопоставление Э3 ↔ ПЭ3',f'Из ПЭ3 извлечено {len(rows)} строк с обозначениями и количеством; уникальных обозначений — {len(spec)}. Из текста Э3 распознано {len(scheme)} обозначений; совпадений — {len(overlap)}.','Для проверки полноты сопоставьте исходные Э3 и ПЭ3 или структурированный экспорт проекта. Это выборочная машинная сверка: отсутствие замечаний не подтверждает полноту схем и перечня'))
+    # Match evidence is limited to explicitly extracted E3 PDF text; this is
+    # a navigation aid, not proof that graphics or the whole scheme agree.
+    examples = []
+    for designation in overlap[:5]:
+        pages = sorted(scheme_pages[designation])
+        visible = ', '.join(str(page) for page in pages[:3])
+        extra = f' (+{len(pages)-3} листов)' if len(pages)>3 else ''
+        examples.append(f'{designation}: лист(ы) PDF {visible}{extra}')
+    match_context = ' Примеры совпадений в Э3: ' + '; '.join(examples) + '.' if examples else ''
+    findings.append(issue('info','KD-PE-100',pe_filename,'Сопоставление Э3 ↔ ПЭ3',f'Из ПЭ3 извлечено {len(rows)} строк с обозначениями и количеством; уникальных обозначений — {len(spec)}. Из текста Э3 распознано {len(scheme)} обозначений; совпадений — {len(overlap)}.' + match_context,'Для проверки полноты сопоставьте исходные Э3 и ПЭ3 или структурированный экспорт проекта. Это выборочная машинная сверка: отсутствие замечаний не подтверждает полноту схем и перечня'))
     missing=sorted(spec-scheme)
     if missing:
         findings.append(issue('info','KD-PE-101',pe_filename,'Ограничения анализа',f'{len(missing)} обозначений ПЭ3 не подтверждены по извлечённому тексту Э3 (примеры: {", ".join(missing[:8])}). Это не считается ошибкой КД.','Для достоверной проверки использовать структурированный экспорт проекта EPLAN или проверить графику вручную'))
