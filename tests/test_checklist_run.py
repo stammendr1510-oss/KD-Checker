@@ -124,3 +124,53 @@ def test_ui_escapes_checklist_titles():
     assert "esc(value.reason" in html
     assert "checklistHtml(saved.checklist||r.checklist)" in html
     assert "checklistHtml(r.checklist)" in html
+
+
+
+def test_api_persists_unconfigured_state_without_claiming_verified(tmp_path, monkeypatch):
+    """A missing feed must remain explicitly unverified in API and history."""
+    monkeypatch.setattr(storage, "DB", tmp_path / "history.sqlite3")
+    monkeypatch.delenv("KD_CHECKLIST_FEED_URL", raising=False)
+    monkeypatch.delenv("KD_CHECKLIST_FEED_TOKEN", raising=False)
+    monkeypatch.setattr(web, "analyze", lambda docs, cfg: [])
+    monkeypatch.setattr(web, "check_spec_duplicates", lambda *a: [])
+    monkeypatch.setattr(web, "crosscheck", lambda *a: [])
+    monkeypatch.setattr(checklist_run, "fetch_current_checklist",
+                        lambda **kw: (_ for _ in ()).throw(AssertionError("unexpected network")))
+    blob = pdf_bytes()
+    with TestClient(web.app) as client:
+        response = client.post("/api/check", files=[
+            ("files", ("synthetic.Э3.pdf", blob, "application/pdf"))
+        ])
+        assert response.status_code == 200
+        result = response.json()
+        assert result["checklist"]["status"] == "not_configured"
+        assert result["checklist"]["items"] == []
+        historical = client.get(f"/api/runs/{result['id']}").json()
+        assert historical["checklist"]["status"] == "not_configured"
+        assert historical["checklist"]["retrieved_at"] is None
+
+
+def test_api_persists_feed_failure_without_exposing_secret(tmp_path, monkeypatch):
+    """An upstream failure must not leak authentication details into history."""
+    monkeypatch.setattr(storage, "DB", tmp_path / "history.sqlite3")
+    monkeypatch.setenv("KD_CHECKLIST_FEED_URL", "https://example.org/checklist")
+    monkeypatch.setenv("KD_CHECKLIST_FEED_TOKEN", "synthetic-secret-123")
+    monkeypatch.setattr(web, "analyze", lambda docs, cfg: [])
+    monkeypatch.setattr(web, "check_spec_duplicates", lambda *a: [])
+    monkeypatch.setattr(web, "crosscheck", lambda *a: [])
+    def failed(**kwargs):
+        raise checklist_run.ChecklistUnavailable("synthetic-secret-123")
+    monkeypatch.setattr(checklist_run, "fetch_current_checklist", failed)
+    with TestClient(web.app) as client:
+        response = client.post("/api/check", files=[
+            ("files", ("synthetic.Э3.pdf", pdf_bytes(), "application/pdf"))
+        ])
+        assert response.status_code == 200
+        result = response.json()
+        assert result["checklist"]["status"] == "unavailable"
+        assert "synthetic-secret-123" not in response.text
+        history = client.get(f"/api/runs/{result['id']}")
+        assert history.status_code == 200
+        assert history.json()["checklist"]["status"] == "unavailable"
+        assert "synthetic-secret-123" not in history.text
