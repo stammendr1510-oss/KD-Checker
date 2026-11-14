@@ -319,3 +319,43 @@ def test_api_ambiguous_versions_are_order_independent(monkeypatch):
             assert len(response.json()["files"]) == 3
 
     assert compared == []
+
+
+
+def test_api_ambiguous_pe3_group_does_not_block_unrelated_pair(monkeypatch):
+    """Ambiguity on the specification side must be isolated to its document key."""
+    def pdf_bytes(label):
+        with fitz.open() as pdf:
+            page = pdf.new_page()
+            page.insert_text((72, 72), label)
+            return pdf.tobytes()
+
+    alpha_scheme = pdf_bytes("Synthetic alpha scheme")
+    alpha_spec_a = pdf_bytes("Synthetic alpha spec A")
+    alpha_spec_b = pdf_bytes("Synthetic alpha spec B")
+    beta_scheme = pdf_bytes("Synthetic beta scheme")
+    beta_spec = pdf_bytes("Synthetic beta spec")
+    scanned, compared = [], []
+    monkeypatch.setattr(web, "analyze", lambda docs, cfg: [])
+    monkeypatch.setattr(web, "save_run", lambda names, issues: 41)
+    monkeypatch.setattr(web, "check_spec_duplicates",
+                        lambda name, data: scanned.append(data) or [])
+    monkeypatch.setattr(web, "crosscheck",
+                        lambda *args: compared.append(args) or [])
+
+    with TestClient(web.app) as client:
+        response = client.post("/api/check", files=[
+            ("files", ("alpha.Э3.pdf", alpha_scheme, "application/pdf")),
+            ("files", ("alpha.ПЭ3.pdf", alpha_spec_a, "application/pdf")),
+            ("files", ("beta.Э3.pdf", beta_scheme, "application/pdf")),
+            ("files", ("alpha.ПЭ3.pdf", alpha_spec_b, "application/pdf")),
+            ("files", ("beta.ПЭ3.pdf", beta_spec, "application/pdf")),
+        ])
+
+    assert response.status_code == 200
+    assert scanned == [alpha_spec_a, alpha_spec_b, beta_spec]
+    assert compared == [("beta.Э3.pdf", beta_scheme, "beta.ПЭ3.pdf", beta_spec)]
+    assert len(response.json()["files"]) == 5
+    codes = [item["code"] for item in response.json()["issues"]]
+    assert codes.count("KD-SET-102") == 1
+    assert codes.count("KD-SET-103") == 1
