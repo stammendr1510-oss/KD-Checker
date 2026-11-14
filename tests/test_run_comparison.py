@@ -119,3 +119,25 @@ def test_comparison_endpoint_refuses_different_compositions(monkeypatch):
         assert client.get("/api/runs/2/compare/2").status_code == 400
         assert client.get("/api/runs/2/compare/999").status_code == 400
         assert client.get("/api/runs/3/compare/1").status_code == 404
+
+
+
+def test_ambiguous_comparison_retains_all_occurrences_for_ui():
+    """The interface must be able to show every old/new occurrence, not just one."""
+    a = issue("KD-DUP")
+    result = compare_runs(run(4, [a, a]), run(5, [a, a, a]))
+    assert result["summary"]["ambiguous"] == 1
+    group = result["ambiguous"][0]
+    assert [x["issue_index"] for x in group["previous"]] == [0, 1]
+    assert [x["issue_index"] for x in group["current"]] == [0, 1, 2]
+    assert result["summary"]["persisting"] == 0
+
+
+def test_comparison_page_renders_both_sides_of_ambiguous_groups():
+    """Regression guard: UI must not collapse ambiguous groups to first finding."""
+    from pathlib import Path
+    page = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(encoding="utf-8")
+    assert "comparisonAmbiguousPanel(ambiguous)" in page
+    assert "group.previous.map(comparisonItem)" in page
+    assert "group.current.map(comparisonItem)" in page
+    assert "result.ambiguous.map(x=>({issue:x.current[0]" not in page
