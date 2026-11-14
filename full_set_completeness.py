@@ -168,7 +168,17 @@ def full_set_findings(sources, unreadable_pdf_names=()):
             continue
         for page,row,text,reference in references:
             if (reference.key,reference.kind) not in present:
+                # A different document type with the same base designation is not
+                # evidence that the exact SP reference was supplied. Report it as
+                # context only, without inferring a renamed file or project defect.
+                other_kinds = sorted(kind for key,kind in present
+                                     if key == reference.key and kind != reference.kind)
+                context = (
+                    ' В загрузке распознаны PDF с тем же базовым обозначением, '
+                    'но другими видами документа: ' + ', '.join(other_kinds) +
+                    '. Они не заменяют указанное в СП обозначение.'
+                ) if other_kinds else ''
                 findings.append(_finding('KD-SET-203',name,f'Лист PDF {page}, строка таблицы {row}, столбец «Обозначение»',
-                    f'«{text}» явно перечислен в СП, но не включён в загрузку среди распознанных PDF. '
-                    'Это не утверждение об отсутствии документа в выпуске.'))
+                    f'«{text}» явно перечислен в СП, но не включён в загрузку среди распознанных PDF.'
+                    + context + ' Это не утверждение об отсутствии документа в выпуске.'))
     return findings
