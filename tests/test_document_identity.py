@@ -280,3 +280,42 @@ def test_api_both_sides_ambiguous_keep_all_standalone_pe3_scans(monkeypatch):
     codes = [issue["code"] for issue in response.json()["issues"]]
     assert codes.count("KD-SET-102") == 2
     assert codes.count("KD-SET-103") == 1
+
+
+
+def test_api_ambiguous_versions_are_order_independent(monkeypatch):
+    """The order of PDF uploads cannot make an ambiguous pair eligible."""
+    def pdf_bytes(label):
+        with fitz.open() as pdf:
+            page = pdf.new_page()
+            page.insert_text((72, 72), label)
+            return pdf.tobytes()
+
+    scheme_a = pdf_bytes("Synthetic scheme A")
+    scheme_b = pdf_bytes("Synthetic scheme B")
+    spec = pdf_bytes("Synthetic spec")
+    compared = []
+    monkeypatch.setattr(web, "analyze", lambda docs, cfg: [])
+    monkeypatch.setattr(web, "save_run", lambda names, issues: 40)
+    monkeypatch.setattr(web, "check_spec_duplicates", lambda *args: [])
+    monkeypatch.setattr(web, "crosscheck",
+                        lambda *args: compared.append(args) or [])
+
+    with TestClient(web.app) as client:
+        for uploads in (
+            [("demo.ПЭ3.pdf", spec), ("demo.Э3.pdf", scheme_a),
+             ("demo.Э3.pdf", scheme_b)],
+            [("demo.Э3.pdf", scheme_b), ("demo.ПЭ3.pdf", spec),
+             ("demo.Э3.pdf", scheme_a)],
+        ):
+            response = client.post("/api/check", files=[
+                ("files", (name, content, "application/pdf"))
+                for name, content in uploads
+            ])
+            assert response.status_code == 200
+            codes = [item["code"] for item in response.json()["issues"]]
+            assert codes.count("KD-SET-102") == 1
+            assert codes.count("KD-SET-103") == 1
+            assert len(response.json()["files"]) == 3
+
+    assert compared == []
