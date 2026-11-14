@@ -193,3 +193,46 @@ def test_source_page_and_duplicate_type_do_not_guess_missing_releases():
     assert [f['location'] for f in findings if f['code']=='KD-SET-203']==[
         'Лист PDF 1, строка таблицы 2, столбец «Обозначение»',
         'Лист PDF 2, строка таблицы 2, столбец «Обозначение»']
+
+
+def test_sp_reference_reports_other_available_kinds_with_same_base():
+    requested = 'DEFG.987654.002.Э3'
+    other_prefix = 'DEFG.987654.002'
+    findings = full_set_findings([
+        (BASE+'.СП.pdf', pdf([requested])),
+        (other_prefix+'.ВО.pdf', pdf()),
+        (other_prefix+'.ПЭ3.pdf', pdf()),
+    ])
+    missing = [f for f in findings if f['code'] == 'KD-SET-203']
+    assert len(missing) == 1
+    assert missing[0]['severity'] == 'info'
+    assert requested in missing[0]['message']
+    assert 'ВО, ПЭ3' in missing[0]['message']
+    assert 'не заменяют указанное' in missing[0]['message']
+    assert 'отсутствии документа в выпуске' in missing[0]['message']
+
+
+def test_exact_sp_reference_present_does_not_report_alternate_kinds():
+    requested = 'DEFG.987654.002.Э3'
+    findings = full_set_findings([
+        (BASE+'.СП.pdf', pdf([requested])),
+        (requested+'.pdf', pdf()),
+        ('DEFG.987654.002.ПЭ3.pdf', pdf()),
+    ])
+    assert not any(f['code'] == 'KD-SET-203' for f in findings)
+
+
+def test_sp_reference_different_base_or_ambiguous_upload_does_not_guess():
+    requested = 'DEFG.987654.002.Э3'
+    findings = full_set_findings([
+        (BASE+'.СП.pdf', pdf([requested])),
+        ('WXYZ.987654.002.ПЭ3.pdf', pdf()),
+    ])
+    missing = next(f for f in findings if f['code'] == 'KD-SET-203')
+    assert 'другими видами документа' not in missing['message']
+    suppressed = full_set_findings([
+        (BASE+'.СП.pdf', pdf([requested])),
+        ('ambiguous.pdf', pdf()),
+        ('DEFG.987654.002.ПЭ3.pdf', pdf()),
+    ])
+    assert not any(f['code'] == 'KD-SET-203' for f in suppressed)
