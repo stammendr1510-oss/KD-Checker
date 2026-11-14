@@ -108,7 +108,7 @@ def test_api_scans_identical_pe3_once_but_reports_repeated_upload(monkeypatch):
     assert len(response.json()["files"]) == 2
 
 
-def test_api_crosscheck_distinct_bytes_of_same_identity_still_run_separately(monkeypatch):
+def test_api_crosscheck_ambiguous_versions_are_not_automatically_paired(monkeypatch):
     with fitz.open() as pdf:
         page = pdf.new_page()
         page.insert_text((72, 72), "Synthetic PDF")
@@ -129,5 +129,6 @@ def test_api_crosscheck_distinct_bytes_of_same_identity_still_run_separately(mon
             ("files", ("demo.ПЭ3.pdf", content1, "application/pdf")),
         ])
     assert response.status_code == 200
-    assert len(calls) == 2
-    assert [i["code"] for i in response.json()["issues"]] == [CODE]
+    assert len(calls) == 0
+    assert [i["code"] for i in response.json()["issues"]] == [CODE, "KD-SET-103"]
+    assert response.json()["summary"]["info"] == 2
