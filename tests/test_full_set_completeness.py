@@ -138,9 +138,17 @@ def test_unknown_upload_and_multiple_spec_versions_suppress_missing_hints():
         assert not any(f['code']=='KD-SET-203' for f in findings)
 
 
-def test_page_count_does_not_trigger_sheet_total_heuristics():
-    findings = full_set_findings([(BASE+'.ВО.pdf',pdf(['Листов 9'], pages=2))])
+@pytest.mark.parametrize(('page_count', 'sheet_label'), [(2, 9), (3, 4)])
+def test_page_count_does_not_trigger_sheet_total_heuristics(page_count, sheet_label):
+    """Synthetic sheet-like text is not a verified title-block field."""
+    label = f'Листов {sheet_label}'
+    content = pdf([label], pages=page_count)
+    with fitz.open(stream=content, filetype='pdf') as document:
+        assert len(document) == page_count
+        assert label in document[0].get_text()
+    findings = full_set_findings([(BASE+'.ВО.pdf', content)])
     assert [f['code'] for f in findings] == ['KD-SET-201']
+    assert all(f['severity'] == 'info' for f in findings)
 
 
 def test_api_history_excel_csv_and_decisions(tmp_path, monkeypatch):
