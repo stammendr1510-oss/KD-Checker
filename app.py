@@ -20,6 +20,7 @@ from excel_reports import build_excel_report
 from set_completeness import unpaired_document_findings
 from document_identity import pdf_identity_findings, unique_pdf_analysis_sources
 from pair_analysis import pair_analysis_plan
+from run_comparison import compare_runs, IncompatibleRuns
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config.json"
@@ -134,6 +135,20 @@ def run(run_id: int):
     if r is None:
         raise HTTPException(404, "Проверка не найдена")
     return r
+
+@app.get("/api/runs/{run_id}/compare/{previous_run_id}")
+def compare_run_results(run_id: int, previous_run_id: int):
+    if previous_run_id >= run_id:
+        raise HTTPException(400, "Номер предыдущей проверки должен быть меньше текущего")
+    current = get_run(run_id)
+    previous = get_run(previous_run_id)
+    if current is None or previous is None:
+        raise HTTPException(404, "Одна из проверок не найдена")
+    try:
+        return compare_runs(previous, current)
+    except IncompatibleRuns as exc:
+        raise HTTPException(409, str(exc)) from exc
+
 
 @app.get("/api/runs/{run_id}/csv")
 def export_csv(run_id: int):
