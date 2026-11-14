@@ -313,12 +313,21 @@ def _unconfirmed_pe3_context(rows, examples):
         for row in rows:
             if designation not in row['entries']:
                 continue
-            place = f"лист PDF {row['page']}"
-            if row.get('row_band') is not None and row.get('table_row') is not None:
-                place += f", строка таблицы {row['table_row']}"
-            places.add(place)
+            page = row['page']
+            table_row = row.get('table_row') if row.get('row_band') is not None else None
+            places.add((page, table_row))
         if places:
-            locations.append(f"{designation}: " + "; ".join(sorted(places)))
+            ordered = sorted(places, key=lambda place: (place[0], place[1] is None,
+                                                       place[1] if place[1] is not None else 0))
+            visible = []
+            for page, table_row in ordered[:3]:
+                source = f"лист PDF {page}"
+                if table_row is not None:
+                    source += f", строка таблицы {table_row}"
+                visible.append(source)
+            extra = len(ordered) - len(visible)
+            remainder = f"; ещё {extra} мест(а)" if extra else ""
+            locations.append(f"{designation}: " + "; ".join(visible) + remainder)
     return " Места в ПЭ3: " + " | ".join(locations) + "." if locations else ""
 
 
