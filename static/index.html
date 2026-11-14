@@ -121,6 +121,7 @@ async function showChecklistComparison(runId){
   const result=await api('/api/runs/'+runId+'/checklist-compare/'+previous);
   if(!result.available){container.textContent=result.reason;return;}
   container.innerHTML='<h4>Изменения требований между проверками №'+previous+' и №'+runId+'</h4><p class="muted">'+esc(result.reason)+'</p>'
+   +'<p><a class="download" href="/api/runs/'+runId+'/checklist-compare/'+previous+'/csv" download>Скачать изменения чек-листа (CSV)</a></p>'
    +checklistDiffList(result.added,'Добавлены')
    +checklistDiffList(result.removed,'Удалены')
    +'<section class="comparison-group"><h5>Изменены ('+result.changed.length+')</h5>'
