@@ -230,10 +230,11 @@ def test_multiple_scheme_pairs_do_not_duplicate_pe3_warnings(monkeypatch):
     monkeypatch.setattr(web, 'analyze', lambda docs, config: [])
     monkeypatch.setattr(web, 'save_run', lambda names, issues: 42)
     repeated = pe3([[('1KM1', 1), ('1KM1', 1)]])
+    identical_scheme = scheme_mentions()
     with TestClient(web.app) as client:
         response = client.post('/api/check', files=[
-            ('files', ('demo.Э3.pdf', scheme_mentions(), 'application/pdf')),
-            ('files', ('demo.Э3.pdf', scheme_mentions(), 'application/pdf')),
+            ('files', ('demo.Э3.pdf', identical_scheme, 'application/pdf')),
+            ('files', ('demo.Э3.pdf', identical_scheme, 'application/pdf')),
             ('files', ('demo.ПЭ3.pdf', repeated, 'application/pdf')),
         ])
     assert response.status_code == 200
