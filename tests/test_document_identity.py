@@ -70,3 +70,64 @@ def test_empty_or_untyped_pdf_sources_are_ignored():
         ("drawing.pdf", None, "drawing", b"x"),
         ("drawing.pdf", None, "drawing", b"x"),
     ]) == []
+
+
+
+def test_analysis_sources_dedup_only_identical_bytes_of_same_document():
+    from document_identity import unique_pdf_analysis_sources
+
+    inputs = [
+        source("alpha.Э3.pdf", b"one"),
+        source("ALPHA.Э3.pdf", b"one"),
+        source("alpha.Э3.pdf", b"two"),
+        source("alpha.ПЭ3.pdf", b"one"),
+        source("beta.Э3.pdf", b"one"),
+    ]
+    retained = unique_pdf_analysis_sources(inputs)
+    assert retained == [inputs[0], inputs[2], inputs[3], inputs[4]]
+
+
+def test_api_scans_identical_pe3_once_but_reports_repeated_upload(monkeypatch):
+    with fitz.open() as pdf:
+        page = pdf.new_page()
+        page.insert_text((72, 72), "Synthetic PE3 drawing")
+        pe_content = pdf.tobytes()
+    calls = []
+    monkeypatch.setattr(web, "analyze", lambda docs, cfg: [])
+    monkeypatch.setattr(web, "save_run", lambda names, issues: 19)
+    monkeypatch.setattr(web, "check_spec_duplicates", lambda name, data: calls.append(name) or [])
+    monkeypatch.setattr(web, "crosscheck", lambda *args: [])
+    with TestClient(web.app) as client:
+        response = client.post("/api/check", files=[
+            ("files", ("demo.ПЭ3.pdf", pe_content, "application/pdf")),
+            ("files", ("demo.ПЭ3.pdf", pe_content, "application/pdf")),
+        ])
+    assert response.status_code == 200
+    assert calls == ["demo.ПЭ3.pdf"]
+    assert [i["code"] for i in response.json()["issues"]] == [CODE]
+    assert len(response.json()["files"]) == 2
+
+
+def test_api_crosscheck_distinct_bytes_of_same_identity_still_run_separately(monkeypatch):
+    with fitz.open() as pdf:
+        page = pdf.new_page()
+        page.insert_text((72, 72), "Synthetic PDF")
+        content1 = pdf.tobytes()
+    with fitz.open() as pdf:
+        page = pdf.new_page()
+        page.insert_text((72, 72), "Different synthetic PDF")
+        content2 = pdf.tobytes()
+    calls = []
+    monkeypatch.setattr(web, "analyze", lambda docs, cfg: [])
+    monkeypatch.setattr(web, "save_run", lambda names, issues: 19)
+    monkeypatch.setattr(web, "check_spec_duplicates", lambda *args: [])
+    monkeypatch.setattr(web, "crosscheck", lambda *args: calls.append(args) or [])
+    with TestClient(web.app) as client:
+        response = client.post("/api/check", files=[
+            ("files", ("demo.Э3.pdf", content1, "application/pdf")),
+            ("files", ("demo.Э3.pdf", content2, "application/pdf")),
+            ("files", ("demo.ПЭ3.pdf", content1, "application/pdf")),
+        ])
+    assert response.status_code == 200
+    assert len(calls) == 2
+    assert [i["code"] for i in response.json()["issues"]] == [CODE]
