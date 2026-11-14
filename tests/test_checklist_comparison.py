@@ -98,5 +98,21 @@ def test_history_ui_contains_safe_checklist_comparison_controls():
     html = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text("utf-8")
     assert "function showChecklistComparison(runId)" in html
     assert "/checklist-compare/" in html
-    assert "row.fields.map(esc)" in html
+    assert "function checklistChangedItem(row)" in html
+    assert "result.changed.map(checklistChangedItem)" in html
     assert "esc(row.current.title)" in html
+
+
+def test_html_comparison_displays_each_changed_field_safely():
+    """Archived checklist text, comments and references must be inert."""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text("utf-8")
+    assert "const checklistFieldNames=" in html
+    assert "const before=row.previous[field]??''" in html
+    assert "const after=row.current[field]??''" in html
+    assert "esc(label)" in html
+    assert "esc(before===''?'—':before)" in html
+    assert "esc(after===''?'—':after)" in html
+    assert "result.changed.map(checklistChangedItem)" in html
+    assert "row.fields.map(esc)" not in html
+    assert "href=\"'+after" not in html
