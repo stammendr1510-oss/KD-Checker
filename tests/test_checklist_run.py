@@ -212,3 +212,44 @@ def test_ui_history_has_checklist_verification_column():
     assert "<th>EPLAN Checklist</th>" in html
     assert "r.checklist_status==='verified'" in html
     assert "r.checklist_status==='unavailable'" in html
+
+
+def test_xlsx_exports_historical_checklist_with_safe_literal_text(tmp_path, monkeypatch):
+    """The Excel report must never refresh the checklist or execute a title."""
+    from contextlib import closing
+    from io import BytesIO
+    from openpyxl import load_workbook
+    from excel_reports import build_excel_report
+    monkeypatch.setattr(storage, "DB", tmp_path / "history.sqlite3")
+    source = sample_state("=HYPERLINK(\"https://invalid.example\",\"click\")")
+    run_id = storage.save_run(["test.pdf"], [], checklist=source)
+    saved = storage.get_run(run_id)
+    with closing(load_workbook(BytesIO(build_excel_report(saved)))) as book:
+        sheet = book["EPLAN Checklist"]
+        assert sheet["B2"].value == "Актуальный список получен на момент проверки"
+        assert sheet["B4"].value == source["revision"]
+        assert sheet["A7"].value == "ID пункта"
+        assert sheet["A8"].value == 41
+        assert sheet["C8"].value == source["reviews"][0]["title"]
+        assert sheet["C8"].data_type == "s"
+        assert sheet["C8"].hyperlink is None
+        assert sheet["D8"].value == "Требует проверки инженером"
+        assert sheet.freeze_panes == "A2"
+
+
+def test_xlsx_does_not_claim_outage_was_verified(tmp_path, monkeypatch):
+    from contextlib import closing
+    from io import BytesIO
+    from openpyxl import load_workbook
+    from excel_reports import build_excel_report
+    monkeypatch.setattr(storage, "DB", tmp_path / "history.sqlite3")
+    run_id = storage.save_run(["test.pdf"], [], checklist={
+        "status": "unavailable", "reason": "Невозможно подключиться",
+        "revision": None, "retrieved_at": None, "items": [], "reviews": [],
+    })
+    with closing(load_workbook(BytesIO(build_excel_report(storage.get_run(run_id))))) as book:
+        sheet = book["EPLAN Checklist"]
+        assert "не подтверждена" in sheet["B2"].value
+        assert sheet["B3"].value == "Невозможно подключиться"
+        assert sheet.max_row == 7
+        assert sheet["A8"].value is None
