@@ -301,6 +301,27 @@ def scheme_designations(page):
         if TAG.fullmatch(candidate) and not _separated_by_rule(page, a, b):
             yield candidate
 
+def _unconfirmed_pe3_context(rows, examples):
+    """Evidence-backed PDF locations for up to eight unconfirmed PE3 designators.
+
+    Never infer a row number from text proximity. A bounded sample avoids
+    huge finding strings on complex projects.
+    """
+    locations = []
+    for designation in examples:
+        places = set()
+        for row in rows:
+            if designation not in row['entries']:
+                continue
+            place = f"лист PDF {row['page']}"
+            if row.get('row_band') is not None and row.get('table_row') is not None:
+                place += f", строка таблицы {row['table_row']}"
+            places.add(place)
+        if places:
+            locations.append(f"{designation}: " + "; ".join(sorted(places)))
+    return " Места в ПЭ3: " + " | ".join(locations) + "." if locations else ""
+
+
 def run(e3_filename,e3_bytes,pe_filename,pe_bytes):
     findings=[]
     rows=get_spec_rows(pe_bytes)
@@ -333,7 +354,8 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes):
     findings.append(issue('info','KD-PE-100',pe_filename,'Сопоставление Э3 ↔ ПЭ3',f'Из ПЭ3 извлечено {len(rows)} строк с обозначениями и количеством; уникальных обозначений — {len(spec)}. Из текста Э3 распознано {len(scheme)} обозначений; совпадений — {len(overlap)}.','Для проверки полноты сопоставьте исходные Э3 и ПЭ3 или структурированный экспорт проекта. Это выборочная машинная сверка: отсутствие замечаний не подтверждает полноту схем и перечня'))
     missing=sorted(spec-scheme)
     if missing:
-        findings.append(issue('info','KD-PE-101',pe_filename,'Ограничения анализа',f'{len(missing)} обозначений ПЭ3 не подтверждены по извлечённому тексту Э3 (примеры: {", ".join(missing[:8])}). Это не считается ошибкой КД.','Для достоверной проверки использовать структурированный экспорт проекта EPLAN или проверить графику вручную'))
+        context = _unconfirmed_pe3_context(rows, missing[:8])
+        findings.append(issue('info','KD-PE-101',pe_filename,'Ограничения анализа',f'{len(missing)} обозначений ПЭ3 не подтверждены по извлечённому тексту Э3 (примеры: {", ".join(missing[:8])}).' + context + ' Это не считается ошибкой КД.','Для достоверной проверки использовать структурированный экспорт проекта EPLAN или проверить графику вручную'))
     return findings
 
 
