@@ -5,6 +5,8 @@ An unavailable configured feed is never represented as a verified snapshot.
 """
 import os
 
+from checklist_supabase import fetch_supabase_checklist
+
 from checklist_snapshot import (
     ChecklistUnavailable, fetch_current_checklist, planned_checklist_reviews
 )
@@ -13,7 +15,12 @@ from checklist_snapshot import (
 def current_checklist_state():
     url = os.environ.get("KD_CHECKLIST_FEED_URL", "").strip()
     token = os.environ.get("KD_CHECKLIST_FEED_TOKEN", "").strip()
-    if not url or not token:
+    project_url = os.environ.get("KD_CHECKLIST_SUPABASE_URL", "").strip()
+    publishable = os.environ.get("KD_CHECKLIST_SUPABASE_PUBLISHABLE_KEY", "").strip()
+    user_jwt = os.environ.get("KD_CHECKLIST_SUPABASE_USER_JWT", "").strip()
+    direct_selected = any((project_url, publishable, user_jwt))
+    feed_selected = any((url, token))
+    if not direct_selected and not feed_selected:
         return {
             "status": "not_configured",
             "reason": "Источник EPLAN Checklist ещё не настроен; актуальность пунктов не проверена",
@@ -23,7 +30,16 @@ def current_checklist_state():
             "reviews": [],
         }
     try:
-        snapshot = fetch_current_checklist(url=url, token=token)
+        if direct_selected and feed_selected:
+            raise ChecklistUnavailable("Одновременно заданы разные источники")
+        if direct_selected:
+            if not all((project_url, publishable, user_jwt)):
+                raise ChecklistUnavailable("Не настроен доступ")
+            snapshot = fetch_supabase_checklist(project_url, publishable, user_jwt)
+        else:
+            if not url or not token:
+                raise ChecklistUnavailable("Не настроен доступ")
+            snapshot = fetch_current_checklist(url=url, token=token)
     except ChecklistUnavailable:
         return {
             "status": "unavailable",
