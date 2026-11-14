@@ -122,7 +122,7 @@ def test_explicit_seven_of_nine_keep_warning_and_all_64_matches(wrapped):
     assert not transformer['unknown']
     findings = run('demo.Э3.pdf', scheme, 'demo.ПЭ3.pdf', pe)
     assert [(f['code'], f['severity']) for f in findings] == [('KD-PE-102', 'warning'), ('KD-PE-100', 'info')]
-    assert findings[0]['location'] == 'Лист 2'
+    assert findings[0]['location'] == f"Лист PDF 2, строка таблицы {transformer['table_row']}"
     assert 'количество 9' in findings[0]['message'] and 'обозначений (7)' in findings[0]['message']
     assert 'уникальных обозначений — 64' in findings[1]['message']
     assert 'совпадений — 64' in findings[1]['message']

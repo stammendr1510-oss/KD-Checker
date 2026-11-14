@@ -320,7 +320,12 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes):
     # split representations and OCR/text-order artifacts.
     for r in rows:
         if not r['unknown'] and len(r['entries'])>1 and len(r['entries'])!=r['quantity']:
-            findings.append(issue('warning','KD-PE-102',pe_filename,f"Лист {r['page']}",f"Для дополнительной проверки: количество {r['quantity']} отличается от числа распознанных обозначений ({len(r['entries'])}) в записи «{r['source']}»",'Требуется проверка инженером: сопоставьте количество и явно указанные обозначения в исходной строке ПЭ3, включая переносы и диапазоны. Это не подтверждённая ошибка КД.'))
+            # The row number is evidence only when backed by PDF grid lines.
+            # Unframed extraction retains page-only location without guessing.
+            place = f"Лист PDF {r['page']}"
+            if r.get('row_band') is not None and r.get('table_row') is not None:
+                place += f", строка таблицы {r['table_row']}"
+            findings.append(issue('warning','KD-PE-102',pe_filename,place,f"Для дополнительной проверки: количество {r['quantity']} отличается от числа распознанных обозначений ({len(r['entries'])}) в записи «{r['source']}»",'Требуется проверка инженером: сопоставьте количество и явно указанные обозначения в исходной строке ПЭ3, включая переносы и диапазоны. Это не подтверждённая ошибка КД.'))
     for code,forms in sorted(script_candidates.items()):
         if len(forms)>1 and any(any('А'<=c<='я' for c in s) for s in forms):
             findings.append(issue('warning','KD-PE-103',e3_filename,'Обозначения в Э3',f"Смешение похожих латинских и кириллических букв: {', '.join(sorted(forms))}",'Унифицируйте алфавит в исходном проекте; проверьте, не разные ли это объекты'))
