@@ -42,6 +42,24 @@ def build_checklist_diff_xlsx(diff):
     _format_sheet(sheet, [20, 20, 25, 85, 85])
     sheet.print_title_rows = "1:1"
 
+    # Only metadata from the already verified, saved comparison is exported.
+    # This second sheet makes an archived workbook traceable without network
+    # access or implying that either revision is currently up to date.
+    audit = workbook.create_sheet("Редакции")
+    audit.append(["Параметр", "Значение"])
+    for label, value in (
+        ("Предыдущая редакция SHA-256", diff.get("previous_revision") or ""),
+        ("Текущая редакция SHA-256", diff.get("current_revision") or ""),
+        ("Добавлено требований", diff["summary"]["added"]),
+        ("Удалено требований", diff["summary"]["removed"]),
+        ("Изменено требований", diff["summary"]["changed"]),
+        ("Ограничение проверки", diff.get("reason") or
+         "Сопоставление формулировок требований не подтверждает соответствие КД"),
+    ):
+        audit.append([label, None])
+        _text(audit.cell(audit.max_row, 2), value)
+    _format_sheet(audit, [45, 105])
+
     output = BytesIO()
     workbook.save(output)
     workbook.close()
