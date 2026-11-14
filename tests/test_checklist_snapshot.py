@@ -143,3 +143,36 @@ def test_invalid_json_rejected(monkeypatch):
     monkeypatch.setattr(adapter.request, "build_opener", lambda *args: fake)
     with pytest.raises(adapter.ChecklistUnavailable, match="JSON"):
         adapter.fetch_current_checklist("https://checklist.example.org/feed", "token")
+
+
+
+def test_untrusted_requirement_text_is_data_never_executed(tmp_path):
+    """A new checklist title must not become Python code or a rule."""
+    marker = tmp_path / "should-not-exist"
+    malicious = (
+        "__import__('pathlib').Path(" + repr(str(marker)) + ").touch()"
+    )
+    incoming = payload()
+    incoming["items"][0]["title"] = malicious
+    snapshot = adapter.validate_checklist_payload(incoming)
+    reviews = adapter.planned_checklist_reviews(snapshot)
+    assert not marker.exists()
+    assert reviews[1]["title"] == malicious
+    assert all(item["status"] == "manual_review" for item in reviews)
+    assert not marker.exists()
+
+
+def test_repeated_call_cannot_reuse_snapshot_after_service_failure(monkeypatch):
+    """A successful earlier read must not disguise a later offline request."""
+    opener = FakeOpener(json.dumps(payload()).encode("utf-8"))
+    monkeypatch.setattr(adapter.request, "build_opener", lambda *args: opener)
+    first = adapter.fetch_current_checklist("https://checklist.example.org/feed", "token")
+    assert len(first["items"]) == 2
+
+    class Offline:
+        def open(self, *args, **kwargs):
+            raise error.URLError("offline")
+
+    monkeypatch.setattr(adapter.request, "build_opener", lambda *args: Offline())
+    with pytest.raises(adapter.ChecklistUnavailable):
+        adapter.fetch_current_checklist("https://checklist.example.org/feed", "token")
