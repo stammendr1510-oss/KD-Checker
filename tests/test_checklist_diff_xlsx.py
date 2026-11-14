@@ -39,8 +39,8 @@ def test_xlsx_preserves_all_added_removed_fields_and_inert_text():
         assert len(records) == 14
         removed = [r for r in records if r[0] == "Удалено"]
         added = [r for r in records if r[0] == "Добавлено"]
-        assert ["Удалено", 17, "Формулировка", before["items"][0]["title"], ""] in removed
-        assert ["Добавлено", 18, "Формулировка", "", "@danger"] in added
+        assert ["Удалено", 17, "Формулировка", before["items"][0]["title"], None] in removed
+        assert ["Добавлено", 18, "Формулировка", None, "@danger"] in added
         for row in sheet.iter_rows(min_row=2):
             for cell in (row[0], row[2], row[3], row[4]):
                 if cell.value is not None:
@@ -57,7 +57,7 @@ def test_xlsx_changed_fields_are_before_after():
         rows = list(sheet.iter_rows(min_row=2, values_only=True))
         assert rows == [
             ("Изменено", 17, "Формулировка", "Исходный пункт", "Другое название"),
-            ("Изменено", 17, "Примечание", "", "Новый комментарий"),
+            ("Изменено", 17, "Примечание", None, "Новый комментарий"),
         ]
 
 
