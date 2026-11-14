@@ -90,3 +90,37 @@ def test_ui_only_offers_excel_after_confirmed_comparison():
     html = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text("utf-8")
     assert "if(!result.available){container.textContent=result.reason;return;}" in html
     assert "'/checklist-compare/'+previous+'/xlsx" in html
+
+
+def test_xlsx_audit_sheet_identifies_both_saved_revisions_and_counts():
+    before = snapshot()
+    after = snapshot(title="Изменено")
+    before["revision"] = "a" * 64
+    after["revision"] = "b" * 64
+    result = compare_checklist_snapshots(before, after)
+    with closing(load_workbook(BytesIO(build_checklist_diff_xlsx(result)))) as book:
+        assert book.sheetnames == ["Изменения Checklist", "Редакции"]
+        sheet = book["Редакции"]
+        assert sheet["A1"].value == "Параметр"
+        assert sheet["B2"].value == "a" * 64
+        assert sheet["B3"].value == "b" * 64
+        assert sheet["B4"].value == "0"
+        assert sheet["B5"].value == "0"
+        assert sheet["B6"].value == "1"
+        assert "соответствие КД не оценивалось" in sheet["B7"].value
+        assert sheet.freeze_panes == "A2"
+
+
+def test_audit_metadata_remains_literal_even_with_formula_like_revision():
+    before, after = snapshot(), snapshot()
+    before["revision"] = '=HYPERLINK("https://example.invalid","click")'
+    after["revision"] = "@cmd"
+    with closing(load_workbook(BytesIO(build_checklist_diff_xlsx(
+        compare_checklist_snapshots(before, after)
+    )))) as book:
+        audit = book["Редакции"]
+        assert audit["B2"].value == before["revision"]
+        assert audit["B3"].value == after["revision"]
+        assert audit["B2"].data_type == audit["B3"].data_type == "s"
+        assert audit["B2"].hyperlink is None
+        assert audit["B3"].hyperlink is None
