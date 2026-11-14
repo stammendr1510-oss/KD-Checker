@@ -15,7 +15,7 @@ from checklist_snapshot import (
     _NoRedirect, validate_checklist_payload,
 )
 
-_COUNT = re.compile(r"^(?:\d+-\d+|\*)/(\d+)$")
+_COUNT = re.compile(r"^(\d+)-(\d+)/(\d+)$")
 
 
 def fetch_supabase_checklist(project_url, publishable_key, user_jwt, *, timeout=8):
@@ -50,6 +50,8 @@ def fetch_supabase_checklist(project_url, publishable_key, user_jwt, *, timeout=
         "Accept": "application/json",
         "Prefer": "count=exact",
         "Range": "0-" + str(MAX_ITEMS),
+        "Cache-Control": "no-store",
+        "Pragma": "no-cache",
     }, method="GET")
     try:
         with request.build_opener(_NoRedirect()).open(req, timeout=timeout) as res:
@@ -64,9 +66,11 @@ def fetch_supabase_checklist(project_url, publishable_key, user_jwt, *, timeout=
     count = _COUNT.fullmatch(count_header.strip())
     if count is None:
         raise ChecklistUnavailable("Supabase не подтвердил полноту выборки")
-    total = int(count[1])
+    start, end, total = map(int, count.groups())
     if total == 0 or total > MAX_ITEMS:
         raise ChecklistUnavailable("Пустой или превышающий лимит список требований")
+    if start != 0 or end != total - 1:
+        raise ChecklistUnavailable("Supabase вернул неполный диапазон требований")
     try:
         records = json.loads(raw)
     except (ValueError, UnicodeDecodeError) as exc:
