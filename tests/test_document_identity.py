@@ -132,3 +132,50 @@ def test_api_crosscheck_ambiguous_versions_are_not_automatically_paired(monkeypa
     assert len(calls) == 0
     assert [i["code"] for i in response.json()["issues"]] == [CODE, "KD-SET-103"]
     assert response.json()["summary"]["info"] == 2
+
+
+def test_api_ambiguous_pair_preserves_independent_pe3_analysis_and_history(monkeypatch):
+    """An ambiguous E3 pair cannot suppress PE3-only checks or uploaded-file history."""
+    def pdf_bytes(label):
+        with fitz.open() as pdf:
+            page = pdf.new_page()
+            page.insert_text((72, 72), label)
+            return pdf.tobytes()
+
+    scheme_a = pdf_bytes("Synthetic scheme version A")
+    scheme_b = pdf_bytes("Synthetic scheme version B")
+    spec = pdf_bytes("Synthetic specification")
+    standalone_calls, crosscheck_calls, saved = [], [], []
+
+    monkeypatch.setattr(web, "analyze", lambda docs, cfg: [])
+    monkeypatch.setattr(web, "check_spec_duplicates",
+                        lambda name, data: standalone_calls.append((name, data)) or [{
+                            "severity": "warning", "code": "KD-PE-104", "file": name,
+                            "location": "ПЭ3", "message": "Synthetic duplicate",
+                            "recommendation": "Review the source",
+                        }])
+    monkeypatch.setattr(web, "crosscheck",
+                        lambda *args: crosscheck_calls.append(args) or [])
+    monkeypatch.setattr(web, "save_run",
+                        lambda names, issues: saved.append((names, issues)) or 23)
+
+    with TestClient(web.app) as client:
+        response = client.post("/api/check", files=[
+            ("files", ("demo.Э3.pdf", scheme_a, "application/pdf")),
+            ("files", ("demo.Э3.pdf", scheme_b, "application/pdf")),
+            ("files", ("demo.ПЭ3.pdf", spec, "application/pdf")),
+        ])
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == 23
+    assert len(payload["files"]) == 3
+    assert len(standalone_calls) == 1
+    assert standalone_calls[0][0] == "demo.ПЭ3.pdf"
+    assert crosscheck_calls == []
+    codes = [item["code"] for item in payload["issues"]]
+    assert codes.count("KD-SET-102") == 1
+    assert codes.count("KD-SET-103") == 1
+    assert codes.count("KD-PE-104") == 1
+    assert len(saved) == 1
+    assert len(saved[0][0]) == 3
+    assert saved[0][1] == payload["issues"]
