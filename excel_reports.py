@@ -79,6 +79,43 @@ def build_excel_report(run):
     findings.auto_filter.ref = f'A1:J{max(1, findings.max_row)}'
     _format_sheet(findings, [7, 20, 18, 38, 24, 80, 80, 32, 70, 36])
     findings.print_title_rows = '1:1'
+    checklist = run.get('checklist')
+    if checklist is not None:
+        # Preserve the exact historical checklist snapshot; never fetch at
+        # export time or present an offline response as a current checklist.
+        checklist_sheet = workbook.create_sheet('EPLAN Checklist')
+        checklist_sheet.append(['Параметр', 'Значение'])
+        statuses = {
+            'verified': 'Актуальный список получен на момент проверки',
+            'unavailable': 'Источник недоступен — актуальность не подтверждена',
+            'not_configured': 'Источник не настроен — актуальность не подтверждена',
+        }
+        status = checklist.get('status', 'not_configured')
+        for label, value in [
+            ('Статус синхронизации', statuses.get(status, 'Актуальность не подтверждена')),
+            ('Причина', checklist.get('reason') or ''),
+            ('Версия (SHA-256)', checklist.get('revision') or ''),
+            ('Время получения (UTC)', checklist.get('retrieved_at') or ''),
+        ]:
+            checklist_sheet.append([label, None])
+            _text(checklist_sheet.cell(checklist_sheet.max_row, 2), value)
+        checklist_sheet.append([])
+        checklist_sheet.append(['ID пункта', 'Раздел', 'Требование', 'Статус', 'Пояснение'])
+        if status == 'verified':
+            for review in checklist.get('reviews', []):
+                checklist_sheet.append([review.get('item_id')])
+                values = [
+                    review.get('section_title', ''),
+                    review.get('title', ''),
+                    'Требует проверки инженером' if review.get('status') == 'manual_review'
+                    else 'Не подтверждено автоматически',
+                    review.get('explanation', ''),
+                ]
+                for col, value in enumerate(values, 2):
+                    _text(checklist_sheet.cell(checklist_sheet.max_row, col), value)
+        checklist_sheet.auto_filter.ref = f'A7:E{max(7, checklist_sheet.max_row)}'
+        _format_sheet(checklist_sheet, [16, 39, 85, 32, 80], header_rows=(1, 7))
+
     output = BytesIO()
     workbook.save(output)
     workbook.close()
