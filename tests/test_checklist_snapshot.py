@@ -189,8 +189,8 @@ def test_comment_and_reference_url_changes_create_new_revision():
     edited_url["items"][0]["url"] = "https://reference.invalid/two"
     assert adapter.validate_checklist_payload(edited_comment)["revision"] != original["revision"]
     assert adapter.validate_checklist_payload(edited_url)["revision"] != original["revision"]
-    assert original["items"][1]["comment"] == ""
-    assert original["items"][0]["url"] == "https://reference.invalid/one"
+    assert original["items"][0]["comment"] == ""
+    assert original["items"][1]["url"] == "https://reference.invalid/one"
 
 
 @pytest.mark.parametrize("field,value", [
