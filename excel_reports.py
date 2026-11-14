@@ -100,7 +100,7 @@ def build_excel_report(run):
             checklist_sheet.append([label, None])
             _text(checklist_sheet.cell(checklist_sheet.max_row, 2), value)
         checklist_sheet.append([])
-        checklist_sheet.append(['ID пункта', 'Раздел', 'Требование', 'Статус', 'Пояснение'])
+        checklist_sheet.append(['ID пункта', 'Раздел', 'Требование', 'Статус', 'Пояснение', 'Комментарий к пункту', 'Ссылка'])
         if status == 'verified':
             for review in checklist.get('reviews', []):
                 checklist_sheet.append([review.get('item_id')])
@@ -110,11 +110,13 @@ def build_excel_report(run):
                     'Требует проверки инженером' if review.get('status') == 'manual_review'
                     else 'Не подтверждено автоматически',
                     review.get('explanation', ''),
+                    review.get('comment', ''),
+                    review.get('url', ''),
                 ]
                 for col, value in enumerate(values, 2):
                     _text(checklist_sheet.cell(checklist_sheet.max_row, col), value)
-        checklist_sheet.auto_filter.ref = f'A7:E{max(7, checklist_sheet.max_row)}'
-        _format_sheet(checklist_sheet, [16, 39, 85, 32, 80], header_rows=(1, 7))
+        checklist_sheet.auto_filter.ref = f'A7:G{max(7, checklist_sheet.max_row)}'
+        _format_sheet(checklist_sheet, [16, 39, 85, 32, 80, 80, 55], header_rows=(1, 7))
 
     output = BytesIO()
     workbook.save(output)
