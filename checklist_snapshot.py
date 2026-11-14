@@ -122,6 +122,8 @@ def planned_checklist_reviews(snapshot):
     return [{
         "item_id": item["id"],
         "title": item["title"],
+        "comment": item.get("comment", ""),
+        "url": item.get("url", ""),
         "section_title": item["section_title"],
         "status": "manual_review",
         "explanation": "Автоматическая проверка этого пункта пока не реализована",
