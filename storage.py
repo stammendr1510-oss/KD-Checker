@@ -175,8 +175,24 @@ def get_run(run_id):
 def list_runs():
     with closing(connect()) as con:
         rows = con.execute('SELECT id,created_at,filenames,issues FROM runs ORDER BY id DESC LIMIT 40').fetchall()
-    return [{'id': r['id'], 'created_at': r['created_at'], 'file_count': len(json.loads(r['filenames'])),
-             'issue_count': len(json.loads(r['issues']))} for r in rows]
+        exists = con.execute("""SELECT 1 FROM sqlite_master
+                                WHERE type='table' AND name='checklist_run_snapshots'""").fetchone()
+        saved = {}
+        if exists and rows:
+            identifiers = [row['id'] for row in rows]
+            placeholders = ','.join('?' for _ in identifiers)
+            for record in con.execute(
+                f'SELECT run_id,snapshot FROM checklist_run_snapshots WHERE run_id IN ({placeholders})',
+                identifiers,
+            ):
+                saved[record['run_id']] = json.loads(record['snapshot'])
+    return [{'id': r['id'], 'created_at': r['created_at'],
+             'file_count': len(json.loads(r['filenames'])),
+             'issue_count': len(json.loads(r['issues'])),
+             'checklist_status': saved[r['id']].get('status', 'unavailable')
+                 if r['id'] in saved else 'not_configured',
+             'checklist_revision': saved[r['id']].get('revision') if r['id'] in saved else None}
+            for r in rows]
 
 
 def update_finding(run_id, finding_id, status, comment, expected_version):
