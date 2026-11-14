@@ -179,3 +179,68 @@ def test_api_ambiguous_pair_preserves_independent_pe3_analysis_and_history(monke
     assert len(saved) == 1
     assert len(saved[0][0]) == 3
     assert saved[0][1] == payload["issues"]
+
+
+def test_api_ambiguous_pe3_versions_preserve_independent_scans(monkeypatch):
+    """Different PE3 bytes are scanned separately, without guessing a scheme pair."""
+    def pdf_bytes(label):
+        with fitz.open() as pdf:
+            page = pdf.new_page()
+            page.insert_text((72, 72), label)
+            return pdf.tobytes()
+
+    scheme = pdf_bytes("Synthetic scheme")
+    spec_a = pdf_bytes("Synthetic specification A")
+    spec_b = pdf_bytes("Synthetic specification B")
+    scanned, compared = [], []
+    monkeypatch.setattr(web, "analyze", lambda docs, cfg: [])
+    monkeypatch.setattr(web, "save_run", lambda names, issues: 37)
+    monkeypatch.setattr(web, "check_spec_duplicates",
+                        lambda name, data: scanned.append((name, data)) or [])
+    monkeypatch.setattr(web, "crosscheck",
+                        lambda *args: compared.append(args) or [])
+
+    with TestClient(web.app) as client:
+        response = client.post("/api/check", files=[
+            ("files", ("demo.Э3.pdf", scheme, "application/pdf")),
+            ("files", ("demo.ПЭ3.pdf", spec_a, "application/pdf")),
+            ("files", ("demo.ПЭ3.pdf", spec_b, "application/pdf")),
+        ])
+    assert response.status_code == 200
+    assert [data for _, data in scanned] == [spec_a, spec_b]
+    assert compared == []
+    assert [item["code"] for item in response.json()["issues"]] == [
+        "KD-SET-102", "KD-SET-103"
+    ]
+
+
+def test_api_ambiguous_group_does_not_suppress_another_valid_pair(monkeypatch):
+    """Only the ambiguous identity is skipped; unrelated one-to-one pairs run."""
+    def pdf_bytes(label):
+        with fitz.open() as pdf:
+            page = pdf.new_page()
+            page.insert_text((72, 72), label)
+            return pdf.tobytes()
+
+    a1, a2 = pdf_bytes("Synthetic scheme A1"), pdf_bytes("Synthetic scheme A2")
+    b_scheme, b_spec = pdf_bytes("Synthetic scheme B"), pdf_bytes("Synthetic spec B")
+    compared = []
+    monkeypatch.setattr(web, "analyze", lambda docs, cfg: [])
+    monkeypatch.setattr(web, "save_run", lambda names, issues: 38)
+    monkeypatch.setattr(web, "check_spec_duplicates", lambda *args: [])
+    monkeypatch.setattr(web, "crosscheck",
+                        lambda *args: compared.append(args) or [])
+
+    with TestClient(web.app) as client:
+        response = client.post("/api/check", files=[
+            ("files", ("alpha.Э3.pdf", a1, "application/pdf")),
+            ("files", ("alpha.Э3.pdf", a2, "application/pdf")),
+            ("files", ("alpha.ПЭ3.pdf", pdf_bytes("Synthetic spec A"), "application/pdf")),
+            ("files", ("beta.Э3.pdf", b_scheme, "application/pdf")),
+            ("files", ("beta.ПЭ3.pdf", b_spec, "application/pdf")),
+        ])
+    assert response.status_code == 200
+    assert compared == [("beta.Э3.pdf", b_scheme, "beta.ПЭ3.pdf", b_spec)]
+    assert [item["code"] for item in response.json()["issues"]] == [
+        "KD-SET-102", "KD-SET-103"
+    ]
