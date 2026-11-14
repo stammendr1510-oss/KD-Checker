@@ -19,6 +19,7 @@ from issue_tracking import MAX_COMMENT, validate_decision
 from excel_reports import build_excel_report
 from set_completeness import unpaired_document_findings
 from document_identity import pdf_identity_findings, unique_pdf_analysis_sources
+from pair_analysis import pair_analysis_plan
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config.json"
@@ -113,12 +114,10 @@ async def check(files: list[UploadFile] = File(...)):
     for pe_name, pe_kind, _, pe_content in analysis_sources:
         if pe_kind == 'ПЭ3':
             issues.extend(check_spec_duplicates(pe_name, pe_content))
-    for name, kind, key, content in analysis_sources:
-        if kind != "Э3":
-            continue
-        for pe_name, pe_kind, pe_key, pe_content in analysis_sources:
-            if pe_kind == "ПЭ3" and pe_key == key:
-                issues.extend(crosscheck(name, content, pe_name, pe_content))
+    pairs, pair_findings = pair_analysis_plan(analysis_sources)
+    issues.extend(pair_findings)
+    for scheme, spec in pairs:
+        issues.extend(crosscheck(scheme[0], scheme[3], spec[0], spec[3]))
     for err in errors:
         issues.append({"severity":"error", "code":"KD-000", "file":err["file"], "location":"Загрузка", "message":err["message"], "recommendation":"Предоставьте корректный файл поддерживаемого формата"})
     run_id = save_run([d.name for d in docs] + [e["file"] for e in errors], issues)
