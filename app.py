@@ -25,6 +25,7 @@ from run_comparison import compare_runs, IncompatibleRuns
 from checklist_run import current_checklist_state
 from checklist_comparison import compare_checklist_snapshots
 from checklist_diff_csv import build_checklist_diff_csv
+from checklist_diff_xlsx import build_checklist_diff_xlsx
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config.json"
@@ -189,6 +190,20 @@ def export_checklist_revision_diff(run_id: int, previous_run_id: int):
     name = f"checklist-diff-{previous_run_id}-{run_id}.csv"
     return Response(
         content=data, media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+@app.get("/api/runs/{run_id}/checklist-compare/{previous_run_id}/xlsx")
+def export_checklist_revision_diff_excel(run_id: int, previous_run_id: int):
+    result = compare_checklist_versions(run_id, previous_run_id)
+    if not result["available"]:
+        raise HTTPException(409, "Для экспорта нужны две подтверждённые редакции чек-листа")
+    data = build_checklist_diff_xlsx(result)
+    name = f"checklist-diff-{previous_run_id}-{run_id}.xlsx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{name}"'},
     )
 
