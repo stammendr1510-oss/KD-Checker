@@ -43,6 +43,10 @@ def test_deterministic_csv_lists_changes_and_escapes_formulas():
     table = parsed(data)
     assert table[0] == ["Тип изменения", "ID требования", "Поле", "Было", "Стало"]
     assert ["Добавлено", "5", "Формулировка", "", "'=1+2"] in table
+    assert ["Добавлено", "5", "ID раздела", "", "1"] in table
+    assert ["Добавлено", "5", "Вкладка", "", "1"] in table
+    assert ["Добавлено", "5", "Порядок", "", "2"] in table
+    assert ["Добавлено", "5", "Примечание", "", ""] in table
     assert ["Изменено", "3", "Формулировка", "'=HYPERLINK(\"https://invalid.example\",\"click\")", "'+SUM(1,2)"] in table
     assert ["Изменено", "3", "Примечание", "", "'@unsafe()"] in table
 
@@ -52,7 +56,10 @@ def test_removed_requirement_is_reported_from_previous_snapshot():
     after = snapshot()
     after["items"] = []
     table = parsed(build_checklist_diff_csv(compare_checklist_snapshots(before, after)))
-    assert table[1] == ["Удалено", "3", "Формулировка", "Схема", ""]
+    assert ["Удалено", "3", "Формулировка", "Схема", ""] in table
+    assert ["Удалено", "3", "ID раздела", "1", ""] in table
+    assert ["Удалено", "3", "Раздел", "Раздел", ""] in table
+    assert ["Удалено", "3", "Вкладка", "1", ""] in table
 
 
 def test_unavailable_versions_cannot_be_exported():
@@ -89,3 +96,25 @@ def test_csv_link_only_renders_after_verified_comparison():
     html = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text("utf-8")
     assert "if(!result.available){container.textContent=result.reason;return;}" in html
     assert "'/checklist-compare/'+previous+'/csv" in html
+
+
+def test_added_and_removed_rows_preserve_all_historical_fields_safely():
+    before = snapshot()
+    before["items"][0]["comment"] = "=CMD()"
+    before["items"][0]["url"] = "https://example.invalid/old"
+    after = snapshot()
+    after["items"][0]["id"] = 9
+    after["items"][0]["comment"] = "+SUM(1)"
+    after["items"][0]["url"] = "https://example.invalid/new"
+    table = parsed(build_checklist_diff_csv(compare_checklist_snapshots(before, after)))
+    removed = [row for row in table[1:] if row[0] == "Удалено"]
+    added = [row for row in table[1:] if row[0] == "Добавлено"]
+    assert len(removed) == len(added) == 7
+    assert ["Удалено", "3", "Примечание", "'=CMD()", ""] in removed
+    assert ["Добавлено", "9", "Примечание", "", "'+SUM(1)"] in added
+    assert ["Удалено", "3", "Источник", "https://example.invalid/old", ""] in removed
+    assert ["Добавлено", "9", "Источник", "", "https://example.invalid/new"] in added
+    assert [row[2] for row in removed] == [
+        "ID раздела", "Раздел", "Формулировка", "Примечание",
+        "Источник", "Вкладка", "Порядок",
+    ]

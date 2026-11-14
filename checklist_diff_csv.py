@@ -32,10 +32,15 @@ def build_checklist_diff_csv(comparison):
     writer.writerow(HEADER)
     for kind, rows in (("Добавлено", comparison["added"]), ("Удалено", comparison["removed"])):
         for row in rows:
-            # Preserve the exact historic requirement in one safe textual field.
-            writer.writerow([kind, row["id"], "Формулировка",
-                             _safe_cell(row.get("title")) if kind == "Удалено" else "",
-                             _safe_cell(row.get("title")) if kind == "Добавлено" else ""])
+            # Preserve all known fields from the historic requirement, including
+            # blank optional fields. Each row names its field for reliable audits.
+            for field, label in FIELD_NAMES.items():
+                value = _safe_cell(row.get(field, ""))
+                writer.writerow([
+                    kind, row["id"], label,
+                    value if kind == "Удалено" else "",
+                    value if kind == "Добавлено" else "",
+                ])
     for change in comparison["changed"]:
         for field in change["fields"]:
             writer.writerow([
