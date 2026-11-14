@@ -230,17 +230,18 @@ def test_multiple_scheme_pairs_do_not_duplicate_pe3_warnings(monkeypatch):
     monkeypatch.setattr(web, 'analyze', lambda docs, config: [])
     monkeypatch.setattr(web, 'save_run', lambda names, issues: 42)
     repeated = pe3([[('1KM1', 1), ('1KM1', 1)]])
+    identical_scheme = scheme_mentions()
     with TestClient(web.app) as client:
         response = client.post('/api/check', files=[
-            ('files', ('demo.Э3.pdf', scheme_mentions(), 'application/pdf')),
-            ('files', ('demo.Э3.pdf', scheme_mentions(), 'application/pdf')),
+            ('files', ('demo.Э3.pdf', identical_scheme, 'application/pdf')),
+            ('files', ('demo.Э3.pdf', identical_scheme, 'application/pdf')),
             ('files', ('demo.ПЭ3.pdf', repeated, 'application/pdf')),
         ])
     assert response.status_code == 200
     codes = [issue['code'] for issue in response.json()['issues']]
     assert codes.count('KD-PE-104') == 1
-    assert codes.count('KD-PE-100') == 2
-    assert codes.count('KD-SET-102') == 1  # Duplicate E3 upload, independent of PE3 detection.
+    assert codes.count('KD-PE-100') == 1  # Identical E3 uploaded twice is analyzed once.
+    assert codes.count('KD-SET-102') == 1  # Repeated upload is still reported.
 
 
 def test_standalone_pe3_decisions_history_recheck_and_exports(tmp_path, monkeypatch):

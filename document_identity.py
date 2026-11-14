@@ -44,3 +44,21 @@ def pdf_identity_findings(pdf_sources):
             ),
         })
     return findings
+
+
+
+def unique_pdf_analysis_sources(pdf_sources):
+    """Analyze an exact same PDF once per document identity within a request.
+
+    Keep the original sources for upload/history reporting and KD-SET-102.
+    Distinct bytes sharing an identity remain separate, since content may differ.
+    """
+    seen = set()
+    unique = []
+    for source in pdf_sources:
+        name, kind, key, content = source
+        marker = (kind, key, sha256(content).digest())
+        if marker not in seen:
+            seen.add(marker)
+            unique.append(source)
+    return unique
