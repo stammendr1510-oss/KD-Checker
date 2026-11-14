@@ -301,6 +301,36 @@ def scheme_designations(page):
         if TAG.fullmatch(candidate) and not _separated_by_rule(page, a, b):
             yield candidate
 
+def _unconfirmed_pe3_context(rows, examples):
+    """Evidence-backed PDF locations for up to eight unconfirmed PE3 designators.
+
+    Never infer a row number from text proximity. A bounded sample avoids
+    huge finding strings on complex projects.
+    """
+    locations = []
+    for designation in examples:
+        places = set()
+        for row in rows:
+            if designation not in row['entries']:
+                continue
+            page = row['page']
+            table_row = row.get('table_row') if row.get('row_band') is not None else None
+            places.add((page, table_row))
+        if places:
+            ordered = sorted(places, key=lambda place: (place[0], place[1] is None,
+                                                       place[1] if place[1] is not None else 0))
+            visible = []
+            for page, table_row in ordered[:3]:
+                source = f"лист PDF {page}"
+                if table_row is not None:
+                    source += f", строка таблицы {table_row}"
+                visible.append(source)
+            extra = len(ordered) - len(visible)
+            remainder = f"; ещё {extra} мест(а)" if extra else ""
+            locations.append(f"{designation}: " + "; ".join(visible) + remainder)
+    return " Места в ПЭ3: " + " | ".join(locations) + "." if locations else ""
+
+
 def run(e3_filename,e3_bytes,pe_filename,pe_bytes):
     findings=[]
     rows=get_spec_rows(pe_bytes)
@@ -333,7 +363,8 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes):
     findings.append(issue('info','KD-PE-100',pe_filename,'Сопоставление Э3 ↔ ПЭ3',f'Из ПЭ3 извлечено {len(rows)} строк с обозначениями и количеством; уникальных обозначений — {len(spec)}. Из текста Э3 распознано {len(scheme)} обозначений; совпадений — {len(overlap)}.','Для проверки полноты сопоставьте исходные Э3 и ПЭ3 или структурированный экспорт проекта. Это выборочная машинная сверка: отсутствие замечаний не подтверждает полноту схем и перечня'))
     missing=sorted(spec-scheme)
     if missing:
-        findings.append(issue('info','KD-PE-101',pe_filename,'Ограничения анализа',f'{len(missing)} обозначений ПЭ3 не подтверждены по извлечённому тексту Э3 (примеры: {", ".join(missing[:8])}). Это не считается ошибкой КД.','Для достоверной проверки использовать структурированный экспорт проекта EPLAN или проверить графику вручную'))
+        context = _unconfirmed_pe3_context(rows, missing[:8])
+        findings.append(issue('info','KD-PE-101',pe_filename,'Ограничения анализа',f'{len(missing)} обозначений ПЭ3 не подтверждены по извлечённому тексту Э3 (примеры: {", ".join(missing[:8])}).' + context + ' Это не считается ошибкой КД.','Для достоверной проверки использовать структурированный экспорт проекта EPLAN или проверить графику вручную'))
     return findings
 
 
