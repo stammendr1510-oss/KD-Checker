@@ -193,3 +193,18 @@ def test_source_page_and_duplicate_type_do_not_guess_missing_releases():
     assert [f['location'] for f in findings if f['code']=='KD-SET-203']==[
         'Лист PDF 1, строка таблицы 2, столбец «Обозначение»',
         'Лист PDF 2, строка таблицы 2, столбец «Обозначение»']
+
+
+def test_synthetic_three_page_vo_with_four_sheets_label_is_not_certified_as_error():
+    """A page-count/title-block discrepancy is only a future heuristic scenario.
+
+    The synthetic title-block-like text is not a validated ESKD sheet field.
+    Do not infer a defective release or add an unsupported sheet-count rule.
+    """
+    content = pdf(['Листов 4'], pages=3)
+    with fitz.open(stream=content, filetype='pdf') as document:
+        assert len(document) == 3
+        assert 'Листов 4' in document[0].get_text()
+    findings = full_set_findings([(BASE+'.ВО.pdf', content)])
+    assert [finding['code'] for finding in findings] == ['KD-SET-201']
+    assert all(finding['severity'] == 'info' for finding in findings)
