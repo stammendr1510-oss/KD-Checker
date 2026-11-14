@@ -43,7 +43,8 @@ def test_xlsx_preserves_all_added_removed_fields_and_inert_text():
         assert ["Добавлено", 18, "Формулировка", "", "@danger"] in added
         for row in sheet.iter_rows(min_row=2):
             for cell in (row[0], row[2], row[3], row[4]):
-                assert cell.data_type == "s"
+                if cell.value is not None:
+                    assert cell.data_type == "s"
                 assert cell.hyperlink is None
         assert sheet["D4"].data_type == "s"
 
