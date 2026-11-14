@@ -337,6 +337,7 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes):
     if not rows:
         return [issue('warning','KD-PE-000',pe_filename,'PDF','Не удалось надёжно извлечь строки перечня элементов','Используйте структурированную выгрузку или Excel для точной сверки')]
     scheme=set(); script_candidates=defaultdict(set); scheme_pages=defaultdict(set)
+    script_form_pages=defaultdict(lambda: defaultdict(set))
     with fitz.open(stream=e3_bytes, filetype='pdf') as pdf:
         for pi,page in enumerate(pdf):
             for value in scheme_designations(page):
@@ -344,8 +345,7 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes):
                 scheme.add(n)
                 script_candidates[n].add(value)
                 scheme_pages[n].add(pi+1)
-                if len(script_candidates[n])>1 and any(any('А'<=c<='я' for c in form) for form in script_candidates[n]):
-                    pass
+                script_form_pages[n][value].add(pi+1)
     spec=set().union(*(r['entries'] for r in rows))
     # No blanket "missing" reporting: drawings may contain auxiliary devices,
     # split representations and OCR/text-order artifacts.
@@ -359,7 +359,15 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes):
             findings.append(issue('warning','KD-PE-102',pe_filename,place,f"Для дополнительной проверки: количество {r['quantity']} отличается от числа распознанных обозначений ({len(r['entries'])}) в записи «{r['source']}»",'Требуется проверка инженером: сопоставьте количество и явно указанные обозначения в исходной строке ПЭ3, включая переносы и диапазоны. Это не подтверждённая ошибка КД.'))
     for code,forms in sorted(script_candidates.items()):
         if len(forms)>1 and any(any('А'<=c<='я' for c in s) for s in forms):
-            findings.append(issue('warning','KD-PE-103',e3_filename,'Обозначения в Э3',f"Смешение похожих латинских и кириллических букв: {', '.join(sorted(forms))}",'Унифицируйте алфавит в исходном проекте; проверьте, не разные ли это объекты'))
+            # Each spelling is tied only to pages where that exact spelling
+            # was extracted. Never treat a normalized match as proof of identity.
+            examples = []
+            for form in sorted(forms):
+                pages = sorted(script_form_pages[code][form])
+                shown = ', '.join(str(p) for p in pages[:3])
+                hidden = f' (+{len(pages)-3} листов)' if len(pages)>3 else ''
+                examples.append(f'{form} — лист(ы) PDF {shown}{hidden}')
+            findings.append(issue('warning','KD-PE-103',e3_filename,'Обозначения в Э3',f"Смешение похожих латинских и кириллических букв: {', '.join(sorted(forms))}. Места исходных написаний: {'; '.join(examples)}.",'Унифицируйте алфавит в исходном проекте; проверьте, не разные ли это объекты'))
     overlap=sorted(spec & scheme)
     # Only the PDF text extracted from E3 is evidence of a match.
     examples = []
