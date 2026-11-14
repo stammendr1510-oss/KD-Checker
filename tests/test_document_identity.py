@@ -244,3 +244,39 @@ def test_api_ambiguous_group_does_not_suppress_another_valid_pair(monkeypatch):
     assert [item["code"] for item in response.json()["issues"]] == [
         "KD-SET-102", "KD-SET-103"
     ]
+
+
+
+def test_api_both_sides_ambiguous_keep_all_standalone_pe3_scans(monkeypatch):
+    """Two distinct versions on each side must never create a guessed pairing."""
+    def pdf_bytes(label):
+        with fitz.open() as pdf:
+            page = pdf.new_page()
+            page.insert_text((72, 72), label)
+            return pdf.tobytes()
+
+    e1, e2 = pdf_bytes("Synthetic scheme A"), pdf_bytes("Synthetic scheme B")
+    p1, p2 = pdf_bytes("Synthetic spec A"), pdf_bytes("Synthetic spec B")
+    scanned, compared = [], []
+    monkeypatch.setattr(web, "analyze", lambda docs, cfg: [])
+    monkeypatch.setattr(web, "save_run", lambda names, issues: 39)
+    monkeypatch.setattr(web, "check_spec_duplicates",
+                        lambda name, data: scanned.append(data) or [])
+    monkeypatch.setattr(web, "crosscheck",
+                        lambda *args: compared.append(args) or [])
+
+    with TestClient(web.app) as client:
+        response = client.post("/api/check", files=[
+            ("files", ("demo.Э3.pdf", e1, "application/pdf")),
+            ("files", ("demo.Э3.pdf", e2, "application/pdf")),
+            ("files", ("demo.ПЭ3.pdf", p1, "application/pdf")),
+            ("files", ("demo.ПЭ3.pdf", p2, "application/pdf")),
+        ])
+
+    assert response.status_code == 200
+    assert scanned == [p1, p2]
+    assert compared == []
+    assert len(response.json()["files"]) == 4
+    codes = [issue["code"] for issue in response.json()["issues"]]
+    assert codes.count("KD-SET-102") == 2
+    assert codes.count("KD-SET-103") == 1
