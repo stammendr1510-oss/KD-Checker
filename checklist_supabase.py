@@ -19,11 +19,15 @@ _COUNT = re.compile(r"^(?:\d+-\d+|\*)/(\d+)$")
 
 
 def fetch_supabase_checklist(project_url, publishable_key, user_jwt, *, timeout=8):
-    parsed = urlsplit(project_url)
+    try:
+        parsed = urlsplit(project_url)
+        port = parsed.port
+    except (TypeError, ValueError) as exc:
+        raise ChecklistUnavailable("Некорректный адрес Supabase") from exc
     if (parsed.scheme != "https" or not parsed.hostname or
             not parsed.hostname.endswith(".supabase.co") or
             parsed.hostname == ".supabase.co" or parsed.username or parsed.password or
-            parsed.port not in (None, 443) or parsed.path not in ("", "/") or
+            port not in (None, 443) or parsed.path not in ("", "/") or
             parsed.query or parsed.fragment):
         raise ChecklistUnavailable("Нужен корректный HTTPS URL проекта Supabase")
     if (not isinstance(publishable_key, str) or
