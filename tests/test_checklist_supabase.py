@@ -65,6 +65,8 @@ def test_single_joined_read_with_authenticated_user(monkeypatch):
     assert opener.request.get_header("Authorization") == "Bearer " + JWT
     assert opener.request.get_header("Apikey") == KEY
     assert opener.request.get_header("Prefer") == "count=exact"
+    assert opener.request.get_header("Cache-control") == "no-store"
+    assert opener.request.get_header("Pragma") == "no-cache"
     assert [item["id"] for item in snapshot["items"]] == [11, 23]
     assert snapshot["items"][1]["comment"] == "Сверить соединения"
     assert len(snapshot["revision"]) == 64
@@ -86,6 +88,11 @@ def test_revision_updates_after_comments_change(monkeypatch):
     ("", rows()),
     ("*/0", []),
     ("0-1/2", [rows()[0]]),
+    ("1-2/2", rows()),
+    ("0-0/2", rows()),
+    ("0-2/2", rows()),
+    ("2-3/2", rows()),
+    ("*/2", rows()),
 ])
 def test_declines_incomplete_or_empty_snapshots(monkeypatch, count, contents):
     install(monkeypatch, contents, count)
