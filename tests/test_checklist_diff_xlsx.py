@@ -46,7 +46,8 @@ def test_xlsx_preserves_all_added_removed_fields_and_inert_text():
                 if cell.value is not None:
                     assert cell.data_type == "s"
                 assert cell.hyperlink is None
-        assert sheet["D4"].data_type == "s"
+        assert sheet["E4"].value == "@danger"
+        assert sheet["E4"].data_type == "s"
 
 
 def test_xlsx_changed_fields_are_before_after():
