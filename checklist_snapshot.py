@@ -30,11 +30,19 @@ def _text(value, label, max_length=2000):
     return value.strip()
 
 
+def _optional_text(value, label, max_length=12000):
+    if value is None:
+        return ""
+    if not isinstance(value, str) or len(value) > max_length:
+        raise ChecklistUnavailable(f"Некорректное поле чек-листа: {label}")
+    return value.strip()
+
+
 def validate_checklist_payload(payload):
     """Validate and normalize the complete server-side current-item snapshot.
 
     Input contract: {'items': [{id:int, section_id:int, title:str,
-    section_title:str, tab:int, position:int}, ...]}.
+    section_title:str, tab:int, position:int, comment:str|null, url:str|null}, ...]}.
     Inactive/deleted items MUST be filtered by the trusted upstream endpoint.
     """
     if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
@@ -60,6 +68,8 @@ def validate_checklist_payload(payload):
             "section_id": section_id,
             "section_title": _text(raw.get("section_title"), "section_title", 500),
             "title": _text(raw.get("title"), "title"),
+            "comment": _optional_text(raw.get("comment"), "comment"),
+            "url": _optional_text(raw.get("url"), "url", 4000),
             "tab": tab,
             "position": position,
         })
