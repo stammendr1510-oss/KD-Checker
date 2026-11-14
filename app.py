@@ -21,6 +21,7 @@ from set_completeness import unpaired_document_findings
 from document_identity import pdf_identity_findings, unique_pdf_analysis_sources
 from pair_analysis import pair_analysis_plan
 from run_comparison import compare_runs, IncompatibleRuns
+from checklist_run import current_checklist_state
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config.json"
@@ -121,9 +122,16 @@ async def check(files: list[UploadFile] = File(...)):
         issues.extend(crosscheck(scheme[0], scheme[3], spec[0], spec[3]))
     for err in errors:
         issues.append({"severity":"error", "code":"KD-000", "file":err["file"], "location":"Загрузка", "message":err["message"], "recommendation":"Предоставьте корректный файл поддерживаемого формата"})
-    run_id = save_run([d.name for d in docs] + [e["file"] for e in errors], issues)
+    # Every new check independently retrieves the current checklist when configured.
+    # No stale snapshot can silently be reused if the upstream is unavailable.
+    checklist = current_checklist_state()
+    names = [d.name for d in docs] + [e["file"] for e in errors]
+    if checklist["status"] == "not_configured":
+        run_id = save_run(names, issues)
+    else:
+        run_id = save_run(names, issues, checklist=checklist)
     summary = {k:sum(i["severity"] == k for i in issues) for k in ("error", "warning", "info")}
-    return {"id":run_id, "files":[{"name":d.name, "type":d.ext, "pages":d.pages, "sheets":len(d.sheets), "entities":d.entities} for d in docs], "issues":issues, "summary":summary}
+    return {"id":run_id, "files":[{"name":d.name, "type":d.ext, "pages":d.pages, "sheets":len(d.sheets), "entities":d.entities} for d in docs], "issues":issues, "summary":summary, "checklist":checklist}
 
 @app.get("/api/runs")
 def runs():

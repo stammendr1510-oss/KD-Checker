@@ -176,3 +176,29 @@ def test_repeated_call_cannot_reuse_snapshot_after_service_failure(monkeypatch):
     monkeypatch.setattr(adapter.request, "build_opener", lambda *args: Offline())
     with pytest.raises(adapter.ChecklistUnavailable):
         adapter.fetch_current_checklist("https://checklist.example.org/feed", "token")
+
+
+def test_comment_and_reference_url_changes_create_new_revision():
+    first = payload()
+    first["items"][0]["comment"] = "Уточнение: напряжение 24 В"
+    first["items"][0]["url"] = "https://reference.invalid/one"
+    original = adapter.validate_checklist_payload(first)
+    edited_comment = json.loads(json.dumps(first))
+    edited_comment["items"][0]["comment"] = "Уточнение: напряжение 48 В"
+    edited_url = json.loads(json.dumps(first))
+    edited_url["items"][0]["url"] = "https://reference.invalid/two"
+    assert adapter.validate_checklist_payload(edited_comment)["revision"] != original["revision"]
+    assert adapter.validate_checklist_payload(edited_url)["revision"] != original["revision"]
+    assert original["items"][0]["comment"] == ""
+    assert original["items"][1]["url"] == "https://reference.invalid/one"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("comment", 7), ("comment", "a" * 12001),
+    ("url", ["https://example.com"]), ("url", "a" * 4001),
+])
+def test_reject_invalid_checklist_details(field, value):
+    incoming = payload()
+    incoming["items"][0][field] = value
+    with pytest.raises(adapter.ChecklistUnavailable):
+        adapter.validate_checklist_payload(incoming)
