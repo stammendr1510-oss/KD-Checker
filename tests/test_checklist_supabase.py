@@ -97,6 +97,7 @@ def test_declines_incomplete_or_empty_snapshots(monkeypatch, count, contents):
     ("http://example.supabase.co", KEY, JWT),
     ("https://example.supabase.co.evil.invalid", KEY, JWT),
     ("https://example.supabase.co/unsafe", KEY, JWT),
+    ("https://example.supabase.co:badport", KEY, JWT),
     (PROJECT, "sb_secret_fake", JWT),
     (PROJECT, "legacy-service-role", JWT),
     (PROJECT, KEY, ""),
