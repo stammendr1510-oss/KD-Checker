@@ -23,6 +23,7 @@ from document_identity import pdf_identity_findings, unique_pdf_analysis_sources
 from pair_analysis import pair_analysis_plan
 from run_comparison import compare_runs, IncompatibleRuns
 from checklist_run import current_checklist_state
+from checklist_comparison import compare_checklist_snapshots
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config.json"
@@ -162,6 +163,20 @@ def compare_run_results(run_id: int, previous_run_id: int):
         return compare_runs(previous, current)
     except IncompatibleRuns as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+@app.get("/api/runs/{run_id}/checklist-compare/{previous_run_id}")
+def compare_checklist_versions(run_id: int, previous_run_id: int):
+    if previous_run_id >= run_id:
+        raise HTTPException(400, "Номер предыдущей проверки должен быть меньше текущего")
+    current = get_run(run_id)
+    previous = get_run(previous_run_id)
+    if current is None or previous is None:
+        raise HTTPException(404, "Одна из проверок не найдена")
+    result = compare_checklist_snapshots(previous["checklist"], current["checklist"])
+    result["previous_run_id"] = previous_run_id
+    result["current_run_id"] = run_id
+    return result
 
 
 @app.get("/api/runs/{run_id}/csv")
