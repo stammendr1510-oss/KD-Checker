@@ -80,3 +80,20 @@ def test_input_order_does_not_change_group_result():
     pairs2, findings2 = pair_analysis_plan(list(reversed(inputs)))
     assert [pair[0][0] for pair in pairs1] == [pair[0][0] for pair in pairs2]
     assert [(i["code"],i["message"]) for i in findings1] == [(i["code"],i["message"]) for i in findings2]
+
+
+def test_identical_copy_plus_distinct_version_remains_ambiguous():
+    """A byte-identical repeat must not hide a genuinely different PDF version."""
+    raw = [
+        src("demo.Э3.pdf", b"version-one"),
+        src("DEMO.Э3.pdf", b"version-one"),
+        src("demo.Э3.pdf", b"version-two"),
+        src("demo.ПЭ3.pdf", b"specification"),
+    ]
+    deduplicated = unique_pdf_analysis_sources(raw)
+    assert len(deduplicated) == 3
+    pairs, findings = pair_analysis_plan(deduplicated)
+    assert pairs == []
+    assert len(findings) == 1
+    assert findings[0]["code"] == CODE
+    assert "Э3: 2, ПЭ3: 1" in findings[0]["message"]
