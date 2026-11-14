@@ -120,13 +120,21 @@ def connect():
     return con
 
 
-def save_run(names, issues):
+def save_run(names, issues, checklist=None):
     with closing(connect()) as con, con:
         con.execute('BEGIN IMMEDIATE')
         cur = con.execute('INSERT INTO runs(created_at,filenames,issues) VALUES(?,?,?)',
                           (_now(), json.dumps(names, ensure_ascii=False), json.dumps(issues, ensure_ascii=False)))
         run_id = cur.lastrowid
         _add_states(con, run_id, names, issues)
+        if checklist is not None:
+            # Optional additive side table: no change to historic runs or decisions.
+            con.execute("""CREATE TABLE IF NOT EXISTS checklist_run_snapshots(
+                run_id INTEGER PRIMARY KEY REFERENCES runs(id),
+                snapshot TEXT NOT NULL
+            )""")
+            con.execute("INSERT INTO checklist_run_snapshots(run_id,snapshot) VALUES(?,?)",
+                        (run_id, json.dumps(checklist, ensure_ascii=False)))
         return run_id
 
 
@@ -149,8 +157,19 @@ def get_run(run_id):
         row = con.execute('SELECT id,created_at,filenames,issues FROM runs WHERE id=?', (run_id,)).fetchone()
         if row is None:
             return None
+        exists = con.execute("""SELECT 1 FROM sqlite_master
+                                WHERE type='table' AND name='checklist_run_snapshots'""").fetchone()
+        checklist_row = (con.execute(
+            "SELECT snapshot FROM checklist_run_snapshots WHERE run_id=?", (run_id,)
+        ).fetchone() if exists else None)
+        checklist = (json.loads(checklist_row["snapshot"]) if checklist_row else {
+            "status": "not_configured",
+            "reason": "При этой проверке снимок EPLAN Checklist не был сохранён",
+            "revision": None, "retrieved_at": None, "items": [], "reviews": [],
+        })
         return {'id': row['id'], 'created_at': row['created_at'], 'files': json.loads(row['filenames']),
-                'issues': json.loads(row['issues']), 'finding_states': _states(con, run_id)}
+                'issues': json.loads(row['issues']), 'finding_states': _states(con, run_id),
+                'checklist': checklist}
 
 
 def list_runs():
