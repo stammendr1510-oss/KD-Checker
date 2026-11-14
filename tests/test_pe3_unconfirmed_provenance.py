@@ -63,3 +63,20 @@ def test_no_unconfirmed_designators_does_not_emit_hint(monkeypatch):
         scheme = pdf.tobytes()
     issues = cross.run("test.Э3.pdf", scheme, "test.ПЭ3.pdf", blank_pdf())
     assert not any(issue["code"] == "KD-PE-101" for issue in issues)
+
+
+def test_many_locations_are_bounded_and_sorted_by_numeric_page(monkeypatch):
+    locations = [source_row(page, ["KM1"], number=2, band=(20, 40))
+                 for page in (12, 3, 1, 7, 2)]
+    issue = finding(monkeypatch, locations)
+    message = issue["message"]
+    assert "KM1: лист PDF 1, строка таблицы 2; лист PDF 2, строка таблицы 2; лист PDF 3, строка таблицы 2; ещё 2 мест(а)" in message
+    assert "лист PDF 7" not in message
+    assert "лист PDF 12" not in message
+
+
+def test_repeat_locations_are_deduplicated_before_cap(monkeypatch):
+    rows = [source_row(2, ["KM1"], number=4, band=(20, 40)) for _ in range(8)]
+    issue = finding(monkeypatch, rows)
+    assert issue["message"].count("лист PDF 2, строка таблицы 4") == 1
+    assert "ещё" not in issue["message"]
