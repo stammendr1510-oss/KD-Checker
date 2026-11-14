@@ -120,7 +120,7 @@ def test_ui_escapes_checklist_titles():
     html = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text("utf-8")
     assert "function checklistHtml(checklist)" in html
     assert "esc(item.title)" in html
-    assert "esc(item.section_title)" in html
+    assert "esc(group.title)" in html
     assert "esc(value.reason" in html
     assert "checklistHtml(saved.checklist||r.checklist)" in html
     assert "checklistHtml(r.checklist)" in html
@@ -279,3 +279,17 @@ def test_xlsx_preserves_comments_and_urls_as_plain_text(tmp_path, monkeypatch):
         assert sheet["F8"].data_type == "s"
         assert sheet["G8"].value == "javascript:alert(1)"
         assert sheet["G8"].hyperlink is None
+
+
+def test_checklist_section_search_is_local_and_does_not_mutate_history():
+    from pathlib import Path
+    html = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text("utf-8")
+    assert "const groups=new Map()" in html
+    assert "String(item.tab)+'/'+String(item.section_id)" in html
+    assert "class=\"checklist-filter\"" in html
+    assert "event.target.closest('.checklist-view')" in html
+    assert "section.hidden=visible===0" in html
+    assert "item.hidden=!match" in html
+    assert "item.textContent.toLocaleLowerCase('ru-RU')" in html
+    assert "esc(group.title)" in html
+    assert "esc(item.title)" in html
