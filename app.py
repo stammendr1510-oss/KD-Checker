@@ -18,6 +18,7 @@ from storage import (get_run, list_runs, save_run, update_finding, finding_histo
 from issue_tracking import MAX_COMMENT, validate_decision
 from excel_reports import build_excel_report
 from set_completeness import unpaired_document_findings
+from document_identity import pdf_identity_findings
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config.json"
@@ -107,6 +108,7 @@ async def check(files: list[UploadFile] = File(...)):
         raise HTTPException(400, "Выберите файлы")
     issues = analyze(docs, load_cfg())
     issues.extend(unpaired_document_findings([name for name, _, _, _ in pdf_sources]))
+    issues.extend(pdf_identity_findings(pdf_sources))
     for pe_name, pe_kind, _, pe_content in pdf_sources:
         if pe_kind == 'ПЭ3':
             issues.extend(check_spec_duplicates(pe_name, pe_content))
