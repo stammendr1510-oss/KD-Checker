@@ -18,6 +18,7 @@ from storage import (get_run, list_runs, save_run, update_finding, finding_histo
 from issue_tracking import MAX_COMMENT, validate_decision
 from excel_reports import build_excel_report
 from set_completeness import unpaired_document_findings
+from full_set_completeness import full_set_findings
 from document_identity import pdf_identity_findings, unique_pdf_analysis_sources
 from pair_analysis import pair_analysis_plan
 from run_comparison import compare_runs, IncompatibleRuns
@@ -89,6 +90,7 @@ async def check(files: list[UploadFile] = File(...)):
         raise HTTPException(413, f"Не более {MAX_FILES} файлов за проверку")
     docs, errors, total = [], [], 0
     pdf_sources = []
+    full_set_sources = []
     for uploaded in files:
         name = Path((uploaded.filename or "").replace("\\", "/")).name
         ext = Path(name).suffix.lower()
@@ -101,6 +103,8 @@ async def check(files: list[UploadFile] = File(...)):
             raise HTTPException(413, "Превышен лимит: 20 МБ на файл, 100 МБ суммарно")
         try:
             docs.append(extract(name, content))
+            if ext == ".pdf":
+                full_set_sources.append((name, content))
             if ext == ".pdf" and designation_type(name):
                 pdf_sources.append((name, designation_type(name), pair_key(name), content))
         except Exception:
@@ -110,6 +114,8 @@ async def check(files: list[UploadFile] = File(...)):
     if not docs and not errors:
         raise HTTPException(400, "Выберите файлы")
     issues = analyze(docs, load_cfg())
+    issues.extend(full_set_findings(full_set_sources,
+                  [error["file"] for error in errors if error["file"].casefold().endswith(".pdf")]))
     issues.extend(unpaired_document_findings([name for name, _, _, _ in pdf_sources]))
     issues.extend(pdf_identity_findings(pdf_sources))
     analysis_sources = unique_pdf_analysis_sources(pdf_sources)
@@ -206,5 +212,6 @@ def export_excel(run_id: int):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8765)
+
 
 
