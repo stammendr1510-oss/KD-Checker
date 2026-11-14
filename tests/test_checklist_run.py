@@ -174,3 +174,41 @@ def test_api_persists_feed_failure_without_exposing_secret(tmp_path, monkeypatch
         assert history.status_code == 200
         assert history.json()["checklist"]["status"] == "unavailable"
         assert "synthetic-secret-123" not in history.text
+
+
+def test_history_list_surfaces_verified_and_unavailable_states(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB", tmp_path / "history.sqlite3")
+    verified = sample_state()
+    first = storage.save_run(["a.pdf"], [], checklist=verified)
+    second = storage.save_run(["b.pdf"], [], checklist={
+        "status": "unavailable", "reason": "Источник недоступен",
+        "revision": None, "retrieved_at": None, "items": [], "reviews": [],
+    })
+    third = storage.save_run(["c.pdf"], [])
+    rows = {r["id"]: r for r in storage.list_runs()}
+    assert rows[first]["checklist_status"] == "verified"
+    assert rows[first]["checklist_revision"] == verified["revision"]
+    assert rows[second]["checklist_status"] == "unavailable"
+    assert rows[second]["checklist_revision"] is None
+    assert rows[third]["checklist_status"] == "not_configured"
+
+
+def test_legacy_history_without_checklist_table(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB", tmp_path / "history.sqlite3")
+    run_id = storage.save_run(["legacy.pdf"], [])
+    import sqlite3
+    with sqlite3.connect(storage.DB) as con:
+        assert con.execute(
+            "SELECT name FROM sqlite_master WHERE name='checklist_run_snapshots'"
+        ).fetchone() is None
+    rows = storage.list_runs()
+    assert rows[0]["id"] == run_id
+    assert rows[0]["checklist_status"] == "not_configured"
+
+
+def test_ui_history_has_checklist_verification_column():
+    from pathlib import Path
+    html = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text("utf-8")
+    assert "<th>EPLAN Checklist</th>" in html
+    assert "r.checklist_status==='verified'" in html
+    assert "r.checklist_status==='unavailable'" in html
