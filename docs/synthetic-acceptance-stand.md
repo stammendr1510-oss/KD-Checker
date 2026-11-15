@@ -72,3 +72,7 @@ POSIX worker budgets проверены локально; Windows Job Object т�
 операторского restore/cutover и разрешения LAN. До этих доказательств и ручного
 review всех зависимостей стенд остаётся синтетическим. Actions пропущен [skip ci]
 при неподтверждённом остатке включённого бюджета; paid runner не используется.
+
+Совместимость с dependency guard #83: Starlette объявлен прямо (>=1.10,<2),
+поскольку фабрика и middleware импортируют его API. Локально проверена 1.10.0
+с FastAPI 0.162.6. Это не lockfile и не доказательство Windows resolver/CI.
