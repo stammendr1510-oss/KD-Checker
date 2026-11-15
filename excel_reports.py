@@ -1,5 +1,6 @@
 """Local XLSX export of saved checks. No document processing or network calls."""
 from io import BytesIO
+import json
 
 from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
@@ -118,6 +119,24 @@ def build_excel_report(run):
         checklist_sheet.auto_filter.ref = f'A7:G{max(7, checklist_sheet.max_row)}'
         _format_sheet(checklist_sheet, [16, 39, 85, 32, 80, 80, 55], header_rows=(1, 7))
 
+    if 'provenance' in run:
+        provenance = run['provenance']
+        sheet = workbook.create_sheet('Происхождение')
+        sheet.append(['Параметр', 'Значение'])
+        rows = [('Статус', 'Снимок записан' if provenance.get('status')=='recorded' else 'Не записано: исторические настройки неизвестны')]
+        if provenance.get('status')=='recorded':
+            evidence = provenance['evidence']
+            rows += [('Pipeline', evidence['pipeline']), ('Формат снимка', evidence['format_version']),
+                     ('Версия конфигурации', evidence['configuration_version'] if evidence['configuration_version'] is not None else 'Неприменимо'),
+                     ('Настройки', json.dumps(evidence['configuration'],ensure_ascii=False,sort_keys=True)),
+                     ('Исходники (SHA-256)', evidence['source_fingerprint']), ('Python', evidence['python_version']),
+                     ('Зависимости', json.dumps(evidence['dependencies'],ensure_ascii=False,sort_keys=True)),
+                     ('Лимиты парсера', json.dumps(evidence['parser_limits'],ensure_ascii=False,sort_keys=True))]
+        rows.append(('Ограничение', 'Локальный снимок не является аттестацией, доказательством ГОСТ или инженерной правильности'))
+        for label,value in rows:
+            sheet.append([label,None])
+            _text(sheet.cell(sheet.max_row,2),value)
+        _format_sheet(sheet,[34,110])
     output = BytesIO()
     workbook.save(output)
     workbook.close()

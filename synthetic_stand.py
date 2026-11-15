@@ -2,8 +2,6 @@
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import hashlib
-from importlib.metadata import version
 import json
 import os
 from pathlib import Path
@@ -17,6 +15,7 @@ from scoped_history import Repository, Scope
 from secure_api import COOKIE, create_secure_app
 from secure_backend import ScopedBackend
 from secure_sessions import Identity
+from source_identity import source_fingerprint, dependency_versions
 
 KIND = 'kd-checker-synthetic-acceptance-v1'
 SCOPE = Scope('synthetic-org-a', 'synthetic-project-a')
@@ -47,19 +46,6 @@ def _json_new(path, payload):
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     with os.fdopen(fd, 'w', encoding='utf-8') as stream:
         json.dump(payload, stream, ensure_ascii=False, indent=2, allow_nan=False)
-
-
-def source_fingerprint():
-    root = Path(__file__).resolve().parent
-    paths = list(root.glob('*.py')) + list((root/'design').rglob('*.py'))
-    paths += [p for p in (root/'secure_static').iterdir() if p.is_file()]
-    paths += [root/'config.json', root/'requirements.txt']
-    names = sorted(p.relative_to(root).as_posix() for p in paths)
-    digest = hashlib.sha256()
-    for name in names:
-        content = (root / name).read_bytes()
-        digest.update(name.encode() + b'\0' + str(len(content)).encode() + b'\0' + content)
-    return digest.hexdigest()
 
 
 @dataclass
@@ -143,9 +129,7 @@ def run_acceptance(workspace, *, synthetic_only=False):
         return {'Origin': stand.origin, 'X-CSRF-Token': response.json()['csrf_token']}
     receipt = {'kind': KIND, 'source_fingerprint': fingerprint, 'python': sys.version.split()[0],
                'platform': sys.platform, 'production_ready': False, 'ci': 'not_run',
-               'dependencies': {name: version(name) for name in
-                                ('fastapi','starlette','uvicorn','pydantic','python-multipart',
-                                 'httpx','PyMuPDF','openpyxl','ezdxf')},
+               'dependencies': dependency_versions(with_test_transport=True),
                'tls_handshake': 'not_run_ASGI_test_transport', 'two_windows_pc': 'not_run',
                'worker_preflight': 'positive_path_passed', 'filesystem_network_sandbox': 'not_provided',
                'enterprise_identity_provider': 'not_configured',
@@ -160,6 +144,12 @@ def run_acceptance(workspace, *, synthetic_only=False):
                     data={'revision': 'synthetic-rev-1'}).json()
             first = upload()
             _require(bool(first['issues']) and bool(first['finding_states']))
+            provenance = first['provenance']
+            _require(provenance['status'] == 'recorded')
+            _require(provenance['evidence']['pipeline'] == 'documents')
+            _require(provenance['evidence']['configuration_version'] == 0)
+            _require(provenance['evidence']['source_fingerprint'] == fingerprint)
+            checks.append('run_provenance_snapshot_recorded')
             identifier = first['id']
             finding = first['finding_states'][0]['id']
             decision = f'/api/runs/{identifier}/findings/{finding}'
@@ -229,12 +219,14 @@ def run_acceptance(workspace, *, synthetic_only=False):
             saved = request(client, 'GET', f'/api/runs/{identifier}').json()
             _require(saved['finding_states'][0]['comment'] == 'Synthetic acceptance decision')
             _require(saved['finding_states'][0]['version'] == 1)
+            _require(saved['provenance'] == provenance)
             restored_audit = request(client, 'GET', decision + '/history').json()
             _require(restored_audit == audit)
             _require(request(client, 'GET', '/api/config/history').json() == config_audit)
             _require(request(client, 'GET', f"/api/runs/{connections['id']}").json()['issues'] == connections['issues'])
             request(client, 'GET', f'/api/runs/{identifier}/xlsx')
-        checks.extend(['backup_restore_integrity_and_audit', 'restored_sessions_start_empty'])
+        checks.extend(['backup_restore_integrity_and_audit', 'restored_sessions_start_empty',
+                       'restored_provenance_preserved'])
         _require(fingerprint == source_fingerprint())
         receipt['status'] = 'synthetic_pass'
     finally:
