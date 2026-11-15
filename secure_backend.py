@@ -23,6 +23,7 @@ from project_configuration import ProjectConfiguration
 from parser_process import run_check, Limits, ProcessingUnavailable
 from run_provenance import capture
 from source_identity import source_fingerprint, dependency_versions
+from parser_capacity import prepare as prepare_capacity
 
 
 class Decision(BaseModel):
@@ -66,6 +67,7 @@ class ScopedBackend:
         self.parser_limits = parser_limits or Limits()
         if not isinstance(self.parser_limits, Limits):
             raise ValueError('Explicit parser Limits required')
+        self.parser_capacity = prepare_capacity(repository.path)
         with repository.transaction(True) as con:
             con.execute('''CREATE TABLE IF NOT EXISTS http_findings(id INTEGER PRIMARY KEY AUTOINCREMENT,
                 org TEXT, project TEXT, run_id INTEGER, ordinal INTEGER, UNIQUE(org,project,run_id,ordinal),
@@ -172,7 +174,8 @@ class ScopedBackend:
                 if (evidence['source_fingerprint'] != self.source_fingerprint
                         or evidence['dependencies'] != self.runtime_dependencies):
                     raise ProcessingUnavailable()
-                issues = await asyncio.to_thread(run_check, files, evidence['configuration'], self.parser_limits)
+                issues = await asyncio.to_thread(run_check, files, evidence['configuration'], self.parser_limits,
+                                                capacity=self.parser_capacity)
                 if (source_fingerprint() != evidence['source_fingerprint']
                         or dependency_versions() != evidence['dependencies']):
                     raise ProcessingUnavailable()
