@@ -196,3 +196,52 @@ def test_sessions_are_individual_and_internal_tokens_are_hashed():
     store.revoke(first)
     assert store.resolve(first) is None
     assert store.resolve(second).identity.subject == 'b'
+
+
+def test_absolute_expiry_cannot_be_extended_by_activity(setup):
+    client, backend, _, now = setup
+    login(client)
+    for _ in range(4):
+        now[0] += 20
+        assert client.get('/api/runs').status_code == 200
+    # Last activity was only 20 seconds ago, within the 30 second idle limit.
+    now[0] += 20
+    assert client.get('/api/runs').status_code == 401
+    assert len(backend.calls) == 4
+
+
+def test_csrf_and_logout_are_bound_to_individual_session(setup):
+    client, backend, sessions, _ = setup
+    first_csrf = login(client)
+    first_token = client.cookies.get(COOKIE)
+    with TestClient(client.app, base_url=ORIGIN) as other:
+        other_csrf = login(other)
+        other_token = other.cookies.get(COOKIE)
+        assert client.post('/api/check', json={}, headers={'origin': ORIGIN, 'x-csrf-token': other_csrf}).status_code == 403
+        assert backend.calls == []
+        assert client.post('/auth/logout', headers={'origin': ORIGIN, 'x-csrf-token': first_csrf}).status_code == 200
+        assert sessions.resolve(first_token) is None
+        assert sessions.resolve(other_token) is not None
+        assert other.get('/api/runs').status_code == 200
+
+
+@pytest.mark.parametrize('adapter', ['verify', 'role', 'dispatch'])
+def test_trusted_adapter_exceptions_never_echo_private_details(setup, adapter, monkeypatch):
+    client, backend, _, _ = setup
+    secret = 'SYNTHETIC-PRIVATE-ADAPTER-DETAIL'
+    def fail(*args):
+        raise RuntimeError(secret)
+    if adapter == 'verify':
+        monkeypatch.setattr(Verifier, 'verify', fail)
+        response = client.post('/auth/login', json={'credential': 'synthetic-ticket'}, headers={'origin': ORIGIN})
+    else:
+        login(client)
+        if adapter == 'role':
+            monkeypatch.setattr(backend, 'role', fail)
+        else:
+            async def async_fail(*args):
+                raise RuntimeError(secret)
+            monkeypatch.setattr(backend, 'dispatch', async_fail)
+        response = client.get('/api/runs')
+    assert response.status_code == 503
+    assert secret not in response.text
