@@ -151,6 +151,9 @@ def test_fresh_session_cannot_inherit_a_prior_engineers_decision(tmp_path):
         assert client.post("/auth/logout", headers=csrf).status_code == 200
         client.cookies.set(COOKIE, old_cookie)
         assert client.get(f"/api/runs/{old['id']}").status_code == 401
+        # Remove the deliberately replayed manual cookie before reauthentication:
+        # TestClient can retain it alongside the server-issued domain cookie.
+        client.cookies.clear()
         fresh = _login(client, "engineer")
         new = _check(client, fresh)
         assert all(state["status"] == "new" for state in new["finding_states"])
