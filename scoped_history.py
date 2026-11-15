@@ -9,6 +9,7 @@ import sqlite3
 
 from issue_tracking import run_scope, validate_decision
 from run_comparison import compare_runs
+from run_provenance import normalize as normalize_provenance, UNKNOWN, comparison as compare_provenance
 
 
 class Denied(Exception): pass
@@ -103,7 +104,7 @@ class Repository:
         if row is None or (write and row['role'] not in ('engineer', 'admin')):
             raise Denied()
 
-    def save(self, subject, scope, files, issues, *, revision):
+    def save(self, subject, scope, files, issues, *, revision, provenance=None):
         if not isinstance(revision, str) or not revision.strip() or len(revision) > 200:
             raise ValueError('Explicit revision required')
         required = ('severity', 'code', 'file', 'location', 'message', 'recommendation')
@@ -115,6 +116,7 @@ class Repository:
             raise ValueError('Invalid bounded run payload')
         if len(json.dumps(issues, ensure_ascii=False, allow_nan=False)) > 10_000_000:
             raise ValueError('Run payload too large')
+        evidence = normalize_provenance(provenance) if provenance is not None else None
         with self.transaction(True) as con:
             self._member(con, subject, scope, True)
             previous = con.execute('SELECT id FROM runs WHERE org=? AND project=? AND scope=? ORDER BY id DESC LIMIT 1',
@@ -127,6 +129,18 @@ class Repository:
             identifier = row.lastrowid
             con.executemany('INSERT INTO decisions(org,project,run_id,ordinal) VALUES(?,?,?,?)',
                             [(scope.organization, scope.project, identifier, n) for n in range(len(issues))])
+            if evidence is not None:
+                con.execute('''CREATE TABLE IF NOT EXISTS run_provenance(
+                    org TEXT, project TEXT, run_id INTEGER, payload TEXT NOT NULL CHECK(length(CAST(payload AS BLOB))<=16384),
+                    PRIMARY KEY(org,project,run_id),
+                    FOREIGN KEY(org,project,run_id) REFERENCES runs(org,project,id))''')
+                con.execute('''CREATE TRIGGER IF NOT EXISTS run_provenance_no_update
+                    BEFORE UPDATE ON run_provenance BEGIN SELECT RAISE(ABORT,'immutable run provenance'); END''')
+                con.execute('''CREATE TRIGGER IF NOT EXISTS run_provenance_no_delete
+                    BEFORE DELETE ON run_provenance BEGIN SELECT RAISE(ABORT,'immutable run provenance'); END''')
+                con.execute('INSERT INTO run_provenance VALUES(?,?,?,?)',
+                            (scope.organization,scope.project,identifier,
+                             json.dumps(evidence,ensure_ascii=False,sort_keys=True,allow_nan=False)))
             return identifier
 
     def _get(self, con, scope, identifier):
@@ -139,6 +153,16 @@ class Repository:
         result['decisions'] = [dict(r) for r in con.execute(
             'SELECT * FROM decisions WHERE org=? AND project=? AND run_id=? ORDER BY ordinal',
             (scope.organization, scope.project, identifier))]
+        result['provenance'] = dict(UNKNOWN)
+        exists = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_provenance'").fetchone()
+        if exists:
+            evidence = con.execute('SELECT CASE WHEN length(CAST(payload AS BLOB))<=16384 THEN payload ELSE NULL END FROM run_provenance WHERE org=? AND project=? AND run_id=?',
+                                   (scope.organization,scope.project,identifier)).fetchone()
+            if evidence:
+                try:
+                    result['provenance'] = {'status':'recorded','evidence':normalize_provenance(json.loads(evidence[0]))}
+                except (TypeError,ValueError):
+                    raise RuntimeError('Invalid stored provenance') from None
         return result
 
     def get(self, subject, scope, identifier):
@@ -155,7 +179,10 @@ class Repository:
     def compare(self, subject, scope, previous, current):
         with self.transaction() as con:
             self._member(con, subject, scope)
-            return compare_runs(self._get(con, scope, previous), self._get(con, scope, current))
+            before,after = self._get(con,scope,previous),self._get(con,scope,current)
+            result = compare_runs(before,after)
+            result['provenance_comparison'] = compare_provenance(before['provenance'],after['provenance'])
+            return result
 
     def update(self, subject, scope, run_id, ordinal, status, comment, expected_version):
         validate_decision(status, comment)

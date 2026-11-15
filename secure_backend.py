@@ -21,6 +21,8 @@ from excel_reports import build_excel_report
 from connection_import import parse_connections
 from project_configuration import ProjectConfiguration
 from parser_process import run_check, Limits, ProcessingUnavailable
+from run_provenance import capture
+from source_identity import source_fingerprint, dependency_versions
 
 
 class Decision(BaseModel):
@@ -59,6 +61,8 @@ def check_documents(files, cfg):
 class ScopedBackend:
     def __init__(self, repository, *, parser_limits=None):
         self.repo = repository
+        self.source_fingerprint = source_fingerprint()
+        self.runtime_dependencies = dependency_versions()
         self.parser_limits = parser_limits or Limits()
         if not isinstance(self.parser_limits, Limits):
             raise ValueError('Explicit parser Limits required')
@@ -120,10 +124,17 @@ class ScopedBackend:
     async def _dispatch(self, method, path, identity, request):
         scope, actor = Scope(identity.organization, identity.project), identity.subject
         if path == '/api/connections/check':
+            evidence = capture('connections')
+            if (evidence['source_fingerprint'] != self.source_fingerprint
+                    or evidence['dependencies'] != self.runtime_dependencies):
+                raise ProcessingUnavailable()
             payload, files, issues = parse_connections(request.state.connection_input)
             if payload.project != identity.project:
                 raise HTTPException(404, 'Not found')
-            identifier = self.repo.save(actor, scope, files, issues, revision=payload.revision)
+            if (source_fingerprint() != evidence['source_fingerprint']
+                    or dependency_versions() != evidence['dependencies']):
+                raise ProcessingUnavailable()
+            identifier = self.repo.save(actor, scope, files, issues, revision=payload.revision, provenance=evidence)
             return self.record(identity, identifier)
         if path == '/api/config':
             if method == 'GET':
@@ -155,9 +166,18 @@ class ScopedBackend:
                     if len(content) > 20*1024*1024 or total > 100*1024*1024:
                         raise HTTPException(413, 'Upload budget exceeded')
                     files.append((name, content))
-                issues = await asyncio.to_thread(run_check, files, self.config(identity), self.parser_limits)
+                settings, version = self.project_configuration.read(identity)
+                evidence = capture('documents', configuration=settings, configuration_version=version,
+                                   parser_limits=self.parser_limits)
+                if (evidence['source_fingerprint'] != self.source_fingerprint
+                        or evidence['dependencies'] != self.runtime_dependencies):
+                    raise ProcessingUnavailable()
+                issues = await asyncio.to_thread(run_check, files, evidence['configuration'], self.parser_limits)
+                if (source_fingerprint() != evidence['source_fingerprint']
+                        or dependency_versions() != evidence['dependencies']):
+                    raise ProcessingUnavailable()
                 # save() rechecks live membership INSIDE its write transaction.
-                identifier = self.repo.save(actor, scope, [f[0] for f in files], issues, revision=revision)
+                identifier = self.repo.save(actor, scope, [f[0] for f in files], issues, revision=revision, provenance=evidence)
                 return self.record(identity, identifier)
         if path == '/api/runs':
             return [self.record(identity, identifier) for identifier in self.repo.list(actor, scope)]
