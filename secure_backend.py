@@ -174,8 +174,27 @@ class ScopedBackend:
                 if (evidence['source_fingerprint'] != self.source_fingerprint
                         or evidence['dependencies'] != self.runtime_dependencies):
                     raise ProcessingUnavailable()
-                issues = await asyncio.to_thread(run_check, files, evidence['configuration'], self.parser_limits,
-                                                capacity=self.parser_capacity)
+                cancelled = getattr(request.state, 'parser_cancelled', None)
+                if cancelled is None or cancelled.is_set():
+                    raise ProcessingUnavailable()
+                work = asyncio.create_task(asyncio.to_thread(run_check, files, evidence['configuration'], self.parser_limits,
+                                                            capacity=self.parser_capacity, cancelled=cancelled))
+                # A second transport/task cancellation can interrupt the cleanup
+                # await. Still observe completion of the independent worker task.
+                work.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+                try:
+                    issues = await asyncio.shield(work)
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    # The thread observes the event and kills/reaps the child.
+                    # Shield keeps task cancellation from discarding its cleanup.
+                    try:
+                        await asyncio.shield(work)
+                    except ProcessingUnavailable:
+                        pass
+                    raise
+                if cancelled.is_set():
+                    raise ProcessingUnavailable()
                 if (source_fingerprint() != evidence['source_fingerprint']
                         or dependency_versions() != evidence['dependencies']):
                     raise ProcessingUnavailable()
