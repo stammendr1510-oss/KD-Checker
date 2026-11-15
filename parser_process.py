@@ -1,5 +1,6 @@
 """Killable document-processing boundary. Not a filesystem/network sandbox."""
 from dataclasses import dataclass
+from contextlib import nullcontext
 import json
 import math
 import os
@@ -30,7 +31,7 @@ class Limits:
     output_bytes: int = 2 * 1024 * 1024
 
     def __post_init__(self):
-        if (not isinstance(self.seconds,(int,float)) or not math.isfinite(self.seconds)
+        if (type(self.seconds) not in (int,float) or not math.isfinite(self.seconds)
                 or not 0 < self.seconds <= 120 or type(self.memory_mb) is not int
                 or not 256 <= self.memory_mb <= 4096 or type(self.cpu_seconds) is not int
                 or not 1 <= self.cpu_seconds <= 120 or type(self.output_bytes) is not int
@@ -119,7 +120,7 @@ def _kill(process):
     process.wait(timeout=5)
 
 
-def run_check(files, config, limits=None):
+def run_check(files, config, limits=None, *, capacity=None):
     limits=limits or Limits()
     if not isinstance(limits,Limits):
         raise ValueError('Explicit Limits required')
@@ -133,7 +134,8 @@ def run_check(files, config, limits=None):
     try:
         with tempfile.TemporaryDirectory(prefix='kd-parser-',dir=_TEMP_ROOT) as directory:
             root=Path(directory)
-            manifest={'config':config,'limits':vars(limits),'files':[]}
+            manifest={'config':config,'limits':vars(limits),'files':[],
+                      'capacity':str(capacity) if capacity is not None else None}
             for index,(name,content) in enumerate(files):
                 filename=f'input-{index}.bin'
                 (root/filename).write_bytes(content)
@@ -204,6 +206,14 @@ def _worker(directory):
     if os.name == 'posix':
         _posix_limits(limits)
     sys.path.insert(0,str(Path(__file__).resolve().parent))
+    # The actual parser owns the lock. A dying HTTP parent must not free its
+    # capacity while an orphan parser is still running. No lease expiry races.
+    from parser_capacity import claim
+    with claim(manifest['capacity']) if manifest.get('capacity') is not None else nullcontext():
+        return _parse(root, manifest, limits)
+
+
+def _parse(root, manifest, limits):
     from secure_backend import check_documents
     files=[(row['name'],(root/row['path']).read_bytes()) for row in manifest['files']]
     issues=check_documents(files,manifest['config'])
