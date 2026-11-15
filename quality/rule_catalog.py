@@ -36,8 +36,11 @@ RULES: dict[str, Rule] = {
     "KD-SET-201": Rule("completeness", "informational", "Current upload inventory only"),
     "KD-SET-202": Rule("completeness", "informational", "Repeated uploaded document kind"),
     "KD-SET-203": Rule("completeness", "informational", "Explicit SP reference absent from upload"),
+    "KD-CON-101": Rule("connections", "informational", "Repeated explicit structured connection record"),
+    "KD-CON-102": Rule("connections", "informational", "Equal endpoints in explicit structured record"),
 }
 
+# KD-CON codes are staged in PR #47 and deliberately optional before its merge.
 # No invented coverage: these targets are not demonstrated by the above rules.
 NOT_YET_VERIFIED = {
     "connections_cables_terminals": "Structured electrical topology validation",
