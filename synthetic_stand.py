@@ -144,7 +144,8 @@ def run_acceptance(workspace, *, synthetic_only=False):
     receipt = {'kind': KIND, 'source_fingerprint': fingerprint, 'python': sys.version.split()[0],
                'platform': sys.platform, 'production_ready': False, 'ci': 'not_run',
                'dependencies': {name: version(name) for name in
-                                ('fastapi','starlette','uvicorn','PyMuPDF','openpyxl','ezdxf')},
+                                ('fastapi','starlette','uvicorn','pydantic','python-multipart',
+                                 'httpx','PyMuPDF','openpyxl','ezdxf')},
                'tls_handshake': 'not_run_ASGI_test_transport', 'two_windows_pc': 'not_run',
                'worker_preflight': 'positive_path_passed', 'filesystem_network_sandbox': 'not_provided',
                'enterprise_identity_provider': 'not_configured',
