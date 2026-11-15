@@ -38,6 +38,8 @@ def test_real_http_pipeline_and_isolation(tmp_path):
     with TestClient(app,base_url=ORIGIN) as client:
         assert client.get('/api/runs').status_code == 401
         headers = login(client,'engineer')
+        assert client.post('/api/check',files={'files':('synthetic.pdf',pdf(),'application/pdf')},
+                           data={'revision':'rev','organization_id':'spoof'},headers=headers).status_code == 422
         def check():
             r = client.post('/api/check', files={'files':('synthetic.pdf',pdf(),'application/pdf')},
                             data={'revision':'synthetic-rev'},headers=headers)
