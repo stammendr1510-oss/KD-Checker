@@ -16,7 +16,8 @@ class Verifier:
     def verify(self, ticket):
         return {'engineer': Identity('engineer','org','project'),
                 'viewer': Identity('viewer','org','project'),
-                'foreign': Identity('foreign','org','other')}.get(ticket)
+                'foreign': Identity('foreign','org','other'),
+                'external': Identity('external','other-org','project')}.get(ticket)
 
 def login(client, ticket):
     r = client.post('/auth/login', json={'credential':ticket}, headers={'origin':ORIGIN})
@@ -31,8 +32,8 @@ def pdf():
 def test_real_http_pipeline_and_isolation(tmp_path):
     repo = Repository.create(tmp_path/'scoped.sqlite3')
     scope = Scope('org','project')
-    for user, role, project in [('engineer','engineer','project'),('viewer','viewer','project'),('foreign','engineer','other')]:
-        repo.provision(user,Scope('org',project),role)
+    for user, role, project in [('engineer','engineer','project'),('viewer','viewer','project'),('foreign','engineer','other'),('external','engineer','project')]:
+        repo.provision(user,Scope('other-org' if user == 'external' else 'org',project),role)
     app = create_secure_app(verifier=Verifier(), backend=ScopedBackend(repo), sessions=Sessions(), origin=ORIGIN)
     with TestClient(app,base_url=ORIGIN) as client:
         assert client.get('/api/runs').status_code == 401
@@ -52,6 +53,8 @@ def test_real_http_pipeline_and_isolation(tmp_path):
         assert len(events) == 1 and events[0]['actor'] == 'engineer'
         second = check()
         assert all(s['status'] == 'new' for s in second['finding_states'])
+        assert client.get(f"/api/runs/{second['id']}/findings/{fid}/history").status_code == 404
+        assert client.patch(url,json={'status':'new','comment':'stale','expected_version':0},headers=headers).status_code == 409
         assert client.get(f"/api/runs/{second['id']}/compare/{first['id']}").json()['summary']['persisting'] > 0
         assert client.get(f"/api/runs/{first['id']}/csv").status_code == 200
         report = client.get(f"/api/runs/{first['id']}/xlsx")
@@ -66,6 +69,9 @@ def test_real_http_pipeline_and_isolation(tmp_path):
             assert client.get(f"/api/runs/{first['id']}{suffix}").status_code == 404
         other = client.post('/api/check',files={'files':('other.pdf',pdf(),'application/pdf')},data={'revision':'rev'},headers=foreign).json()
         assert client.get(f"/api/runs/{other['id']}/compare/{first['id']}").status_code == 404
+        foreign = login(client,'external')
+        assert client.get('/api/runs').json() == []
+        assert client.get(f"/api/runs/{first['id']}/xlsx").status_code == 404
         old = client.cookies.get(COOKIE)
         assert client.post('/auth/logout',headers=foreign).status_code == 200
         client.cookies.set(COOKIE,old)
