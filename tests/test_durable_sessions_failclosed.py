@@ -110,6 +110,7 @@ def test_exact_expiry_boundaries_are_denied(tmp_path, boundary):
         for _ in range(4):
             now[0] += 20
             store.touch(token)
+        now[0] += 20  # 100 seconds after issue, exactly absolute expiry
     else:
         now[0] += seconds
     assert store.resolve(token) is None
