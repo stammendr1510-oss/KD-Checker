@@ -64,7 +64,7 @@ def test_without_backup_only_internal_consistency_can_be_attested(migrated):
 
 @pytest.mark.parametrize("sql,expected", [
     ("UPDATE runs SET created_at='forged date' WHERE id=1", "run_mapping"),
-    ("UPDATE runs SET files='[\\\"other.pdf\\\"]' WHERE id=1", "run_mapping"),
+    ("UPDATE runs SET files='[]' WHERE id=1", "run_mapping"),
     ("UPDATE runs SET issues='[]' WHERE id=1", "run_mapping"),
     ("UPDATE runs SET previous_id=NULL WHERE id=2", "run_mapping"),
     ("UPDATE runs SET scope='wrong' WHERE id=1", "run_mapping"),
