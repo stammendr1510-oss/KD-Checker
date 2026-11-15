@@ -7,7 +7,7 @@ from pathlib import Path
 from collections.abc import Iterable
 
 
-_WORD = r"[\\w]"
+_WORD = r"[\w]"
 
 
 def _normalized(value: str) -> str:
