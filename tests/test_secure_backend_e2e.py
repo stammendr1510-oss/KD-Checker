@@ -96,3 +96,32 @@ def test_membership_revoked_between_http_gate_and_repository_write(tmp_path, mon
         assert r.status_code == 403
     with repo.transaction() as con:
         assert con.execute('SELECT count(*) FROM runs').fetchone()[0] == 0
+
+
+def test_scoped_database_backup_restore_through_fresh_http_app(tmp_path):
+    import sqlite3
+    repo = Repository.create(tmp_path/'original.sqlite3')
+    repo.provision('engineer',Scope('org','project'),'engineer')
+    def app(repository):
+        return create_secure_app(verifier=Verifier(),backend=ScopedBackend(repository),sessions=Sessions(),origin=ORIGIN)
+    with TestClient(app(repo),base_url=ORIGIN) as client:
+        headers = login(client,'engineer')
+        run = client.post('/api/check',files={'files':('synthetic.pdf',pdf(),'application/pdf')},data={'revision':'rev'},headers=headers).json()
+        fid = run['finding_states'][0]['id']
+        url = f"/api/runs/{run['id']}/findings/{fid}"
+        assert client.patch(url,json={'status':'resolved','comment':'Restored synthetic decision','expected_version':0},headers=headers).status_code == 200
+        old_cookie = client.cookies.get(COOKIE)
+    # Stopped synthetic application; copy to a new file, never replace source.
+    destination = tmp_path/'restored.sqlite3'
+    with closing(sqlite3.connect(repo.path)) as source, closing(sqlite3.connect(destination)) as target:
+        source.backup(target)
+    with TestClient(app(Repository(destination)),base_url=ORIGIN) as client:
+        client.cookies.set(COOKIE,old_cookie)
+        assert client.get(f"/api/runs/{run['id']}").status_code == 401
+        login(client,'engineer')
+        record = client.get(f"/api/runs/{run['id']}").json()
+        assert record['finding_states'][0]['comment'] == 'Restored synthetic decision'
+        assert record['finding_states'][0]['version'] == 1
+        events = client.get(url+'/history').json()
+        assert len(events) == 1 and events[0]['actor'] == 'engineer'
+        assert client.get(f"/api/runs/{run['id']}/xlsx").status_code == 200
