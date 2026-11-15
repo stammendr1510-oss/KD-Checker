@@ -3,9 +3,9 @@
 This is an integrity diagnostic, NOT cryptographic attestation, ESKD validation,
 a migration utility, or a repair mechanism. Never writes to the source database.
 """
-from collections import Counter
 from contextlib import closing
 from pathlib import Path
+import json
 import sqlite3
 
 
@@ -59,10 +59,40 @@ def inspect_scoped_history(path):
                            old_version, new_version
                     FROM events ORDER BY org, project, run_id, ordinal, new_version
                 """).fetchall()
-                runs = con.execute("SELECT count(*) FROM runs").fetchone()[0]
+                run_rows = con.execute("""
+                    SELECT id, org, project, previous_id, files, issues, scope
+                    FROM runs ORDER BY id
+                """).fetchall()
+                runs = len(run_rows)
             except sqlite3.DatabaseError:
                 report("schema", "Required scoped history tables or columns unavailable")
                 return {"ok": False, "problems": problems, "counts": {}}
+
+            # Detect internally inconsistent snapshots even when every SQL FK passes.
+            decisions_by_run = {}
+            for item in decisions:
+                key = (item["org"], item["project"], item["run_id"])
+                decisions_by_run.setdefault(key, []).append(item["ordinal"])
+            by_run_id = {run["id"]: run for run in run_rows}
+            for run in run_rows:
+                key = (run["org"], run["project"], run["id"])
+                try:
+                    issues = json.loads(run["issues"])
+                    files = json.loads(run["files"])
+                    if not isinstance(issues, list) or not isinstance(files, list):
+                        raise ValueError("Unexpected JSON shapes")
+                except (ValueError, TypeError):
+                    report("run_payload", "Invalid run files or issues JSON")
+                    continue
+                ordinals = sorted(decisions_by_run.get(key, []))
+                if ordinals != list(range(len(issues))):
+                    report("finding_cardinality", "Finding decisions do not match issue indices")
+                if run["previous_id"] is not None:
+                    previous = by_run_id.get(run["previous_id"])
+                    if (previous is None or previous["id"] >= run["id"]
+                            or (previous["org"], previous["project"], previous["scope"])
+                            != (run["org"], run["project"], run["scope"])):
+                        report("previous_link", "Previous run does not belong to same ordered file scope")
 
             by_finding = {}
             for row in events:
