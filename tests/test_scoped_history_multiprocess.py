@@ -9,7 +9,7 @@ from queue import Empty
 
 import pytest
 
-from scoped_history import Conflict, Denied, Repository, Scope
+from scoped_history import Conflict, Denied, Missing, Repository, Scope
 
 
 SCOPE = Scope("synthetic-organization", "synthetic-project")
@@ -35,6 +35,9 @@ def _worker(path, ready, results, operation, run_id, label):
                 "engineer", SCOPE, ["synthetic.pdf"], [ISSUE], revision="rev-1"
             )
             results.put(("ok", identifier))
+        elif operation == "foreign":
+            repository.get("viewer", SCOPE, run_id)
+            results.put(("ok", None))
         elif operation == "revoked":
             repository.get("engineer", SCOPE, run_id)
             results.put(("ok", None))
@@ -44,6 +47,8 @@ def _worker(path, ready, results, operation, run_id, label):
         results.put(("conflict", None))
     except Denied:
         results.put(("denied", None))
+    except Missing:
+        results.put(("missing", None))
     except Exception as exc:
         results.put(("error", type(exc).__name__))
 
@@ -141,3 +146,17 @@ def test_revocation_visible_to_new_process_transactions(scoped_repository):
     )
     assert outcomes == [("denied", None)]
     assert repo.get("viewer", SCOPE, identifier)["issues"] == [ISSUE]
+
+
+def test_foreign_project_id_is_not_readable_by_a_separate_process(scoped_repository):
+    repo = scoped_repository
+    foreign = Scope("synthetic-organization", "other-project")
+    repo.provision("engineer", foreign, "engineer")
+    repo.provision("viewer", foreign, "viewer")
+    foreign_run = repo.save(
+        "engineer", foreign, ["synthetic.pdf"], [ISSUE], revision="rev-1"
+    )
+    assert repo.get("viewer", foreign, foreign_run)["issues"] == [ISSUE]
+    assert _run_workers(repo.path, "foreign", foreign_run, count=1) == [
+        ("missing", None)
+    ]
