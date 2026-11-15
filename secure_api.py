@@ -6,6 +6,7 @@ bundled. The prototype protects dispatch, not the internals of an arbitrary adap
 from typing import Protocol
 from urllib.parse import urlsplit
 import secrets
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -17,6 +18,9 @@ from secure_sessions import Identity, Sessions, digest
 from body_budget import BodyBudget
 
 COOKIE = '__Host-kd_session'
+WORKBENCH_ASSETS = {'/workbench': ('workbench.html', 'text/html'),
+                    '/workbench.js': ('workbench.js', 'text/javascript'),
+                    '/workbench.css': ('workbench.css', 'text/css')}
 CONNECTION_PATH = '/api/connections/check'
 EXTRA_ROUTES = {('POST', CONNECTION_PATH): Action.CHECK,
                 ('GET', '/api/config/history'): Action.READ}
@@ -67,7 +71,7 @@ def create_secure_app(*, verifier: Verifier, backend: Backend, sessions: Session
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[url.hostname])
     app.add_middleware(BodyBudget, limit=body_limit, seconds=body_seconds,
-                       path_limits={CONNECTION_PATH: MAX_CONNECTION_BODY,
+                       path_limits={**{path: 0 for path in WORKBENCH_ASSETS}, CONNECTION_PATH: MAX_CONNECTION_BODY,
                                     '/auth/login':8192, '/api/config':65536})
 
     @app.exception_handler(RequestValidationError)
@@ -90,7 +94,8 @@ def create_secure_app(*, verifier: Verifier, backend: Backend, sessions: Session
             return Response(status_code=400)
         token = request.cookies.get(COOKIE)
         record = sessions.resolve(token)
-        if request.url.path != '/auth/login' and record is None:
+        public_asset = request.method == 'GET' and request.url.path in WORKBENCH_ASSETS
+        if request.url.path != '/auth/login' and not public_asset and record is None:
             return Response(status_code=401)
         if any(h in request.headers for h in ('x-user-id', 'x-role', 'x-organization-id', 'x-project-id')):
             return Response(status_code=403)
@@ -100,7 +105,31 @@ def create_secure_app(*, verifier: Verifier, backend: Backend, sessions: Session
             return Response(status_code=503)
         response.headers['Cache-Control'] = 'no-store'
         response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Content-Security-Policy'] = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'"
         return response
+
+    @app.get('/workbench')
+    @app.get('/workbench.js')
+    @app.get('/workbench.css')
+    def workbench(request: Request):
+        filename, media_type = WORKBENCH_ASSETS[request.url.path]
+        content = (Path(__file__).parent / 'secure_static' / filename).read_bytes()
+        return Response(content, media_type=media_type)
+
+    @app.get('/auth/context')
+    def current_context(request: Request):
+        record = sessions.resolve(request.cookies.get(COOKIE))
+        if record is None:
+            raise HTTPException(401, 'Authentication required')
+        identity = record.identity
+        try:
+            role = backend.role(identity)
+        except Exception:
+            raise HTTPException(503, 'Authorization unavailable') from None
+        if not isinstance(role, Role):
+            raise HTTPException(403, 'Request denied')
+        return {'subject':identity.subject, 'organization':identity.organization,
+                'project':identity.project, 'role':role.value}
 
     @app.post('/auth/login')
     def login(data: Login, request: Request, response: Response):
