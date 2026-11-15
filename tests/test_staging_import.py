@@ -104,6 +104,20 @@ def test_sequence_high_water_marks_survive_staging(source, tmp_path):
     assert target.history('operator', SCOPE, first, 0)[-1]['id'] > 2000
 
 
+def test_empty_history_retains_reserved_identifiers(source, tmp_path):
+    path, _, _ = source
+    with closing(sqlite3.connect(path)) as con, con:
+        for table in ('finding_events', 'finding_states', 'issue_runs', 'runs'):
+            con.execute(f'DELETE FROM {table}')
+        con.execute("UPDATE sqlite_sequence SET seq=1000 WHERE name='runs'")
+        con.execute("UPDATE sqlite_sequence SET seq=2000 WHERE name='finding_events'")
+    target = migrate(path, tmp_path)
+    identifier = target.save('operator', SCOPE, ['synthetic.pdf'], [ISSUE], revision='new')
+    assert identifier > 1000
+    target.update('operator', SCOPE, identifier, 0, 'resolved', 'Synthetic', 0)
+    assert target.history('operator', SCOPE, identifier, 0)[0]['id'] > 2000
+
+
 def test_mid_import_failure_cleans_only_new_staging(source, tmp_path, monkeypatch):
     from scoped_history import Repository
     path, _, _ = source

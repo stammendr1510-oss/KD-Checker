@@ -112,7 +112,9 @@ def stage_history(source, backup, staging, *, scope: Scope, revision: str, opera
             for sequence in rows.get('sqlite_sequence', []):
                 mapped = {'runs': 'runs', 'finding_events': 'events'}.get(sequence['name'])
                 if mapped:
-                    con.execute('UPDATE sqlite_sequence SET seq=max(seq,?) WHERE name=?', (sequence['seq'], mapped))
+                    changed = con.execute('UPDATE sqlite_sequence SET seq=max(seq,?) WHERE name=?', (sequence['seq'], mapped))
+                    if not changed.rowcount:
+                        con.execute('INSERT INTO sqlite_sequence(name,seq) VALUES(?,?)', (mapped, sequence['seq']))
             for table, count in [('runs', len(runs)), ('decisions', len(states)), ('events', len(rows['finding_events']))]:
                 if con.execute(f'SELECT count(*) FROM {table}').fetchone()[0] != count:
                     raise ValueError('Staging count mismatch')
