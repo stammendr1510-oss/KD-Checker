@@ -4,7 +4,6 @@ Checks structural evidence, not provenance/authenticity. The trusted operator
 must use quiescent local copies. Never opens a SQLite database for writing.
 Diagnostic output intentionally excludes organization, actor and document data.
 """
-from collections import Counter
 from contextlib import closing
 import hashlib
 import json
@@ -107,11 +106,6 @@ def verify_staging_import(staging_path, *, verified_backup=None):
                         flag("archive_payload", "Malformed archived legacy source row")
                         continue
                     archive.setdefault(name, []).append((row["ordinal"], payload))
-                for required in REQUIRED_SOURCE:
-                    if required not in archive:
-                        # Empty legacy tables can legitimately contain no archived rows.
-                        # Only completeness can be proven against the optional backup.
-                        continue
                 for name, entries in archive.items():
                     if [i for i, _ in entries] != list(range(len(entries))):
                         flag("archive_order", "Missing or non-contiguous archive ordinal")
