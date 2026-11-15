@@ -33,7 +33,8 @@ child ждёт bootstrap barrier до назначения job. Ошибка н�
 процесса. Нужен отдельный непривилегированный аккаунт и правила сети/ACL для
 предприятия. Memory limit — виртуальная память на POSIX и committed memory на
 Windows, эти свойства не эквивалентны. Квота разных репозиториев/серверов и temp disk,
-корректная отмена при обрыве клиента и production supervision требуют работы.
+production supervision требуют работы. Отмена после наблюдённого ASGI disconnect
+описана в [parser-disconnect-cancellation.md](parser-disconnect-cancellation.md).
 Нельзя использовать на реальных КД или объявлять G1–G7 выполненными.
 
 Тесты только synthetic: сохранение результатов четырёх форматов, hard timeout,

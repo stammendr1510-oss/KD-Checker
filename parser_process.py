@@ -120,10 +120,14 @@ def _kill(process):
     process.wait(timeout=5)
 
 
-def run_check(files, config, limits=None, *, capacity=None):
+def run_check(files, config, limits=None, *, capacity=None, cancelled=None):
     limits=limits or Limits()
     if not isinstance(limits,Limits):
         raise ValueError('Explicit Limits required')
+    if cancelled is not None and not isinstance(cancelled,threading.Event):
+        raise ValueError('Explicit cancellation Event required')
+    if cancelled is not None and cancelled.is_set():
+        raise ProcessingUnavailable()
     if (not isinstance(files,list) or not 1 <= len(files) <= 100
             or any(not isinstance(name,str) or not name or len(name)>1000
                    or not isinstance(content,bytes) or len(content)>20*1024*1024 for name,content in files)
@@ -158,11 +162,20 @@ def run_check(files, config, limits=None, *, capacity=None):
                 if job:
                     job.assign(process.pid)
                 (root/'go').touch(exist_ok=False)
-                try:
-                    code=process.wait(timeout=limits.seconds)
-                except subprocess.TimeoutExpired:
-                    _kill(process)
-                    raise ProcessingUnavailable() from None
+                deadline=time.monotonic()+limits.seconds
+                while True:
+                    if cancelled is not None and cancelled.is_set():
+                        _kill(process)
+                        raise ProcessingUnavailable()
+                    remaining=deadline-time.monotonic()
+                    if remaining <= 0:
+                        _kill(process)
+                        raise ProcessingUnavailable()
+                    try:
+                        code=process.wait(timeout=min(remaining,.05) if cancelled is not None else remaining)
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
                 if code != 0:
                     raise ProcessingUnavailable()
                 result=root/'result.json'
@@ -172,7 +185,10 @@ def run_check(files, config, limits=None, *, capacity=None):
                     raw=stream.read(limits.output_bytes+1)
                 if len(raw)>limits.output_bytes:
                     raise ProcessingUnavailable()
-                return _validate_result(json.loads(raw))
+                issues=_validate_result(json.loads(raw))
+                if cancelled is not None and cancelled.is_set():
+                    raise ProcessingUnavailable()
+                return issues
             except (OSError,ValueError,RecursionError,subprocess.SubprocessError):
                 raise ProcessingUnavailable() from None
             finally:
