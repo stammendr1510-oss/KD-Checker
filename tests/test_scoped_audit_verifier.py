@@ -103,3 +103,41 @@ def test_readonly_verifier_preserves_record_and_audit(history):
     assert inspect_scoped_history(repo.path)["ok"]
     assert repo.get("engineer", SCOPE, rid) == before
     assert repo.history("engineer", SCOPE, rid, 0) == audit_before
+
+
+def test_missing_finding_decision_detected_even_when_foreign_keys_pass(history):
+    repo, rid = history
+    mutate(repo, "DELETE FROM decisions WHERE run_id=?", (rid,))
+    result = inspect_scoped_history(repo.path)
+    assert result["ok"] is False
+    assert "finding_cardinality" in {x["code"] for x in result["problems"]}
+
+
+def test_invalid_run_payload_json_is_detected(history):
+    repo, rid = history
+    mutate(repo, "UPDATE runs SET issues='not-json' WHERE id=?", (rid,))
+    result = inspect_scoped_history(repo.path)
+    assert result["ok"] is False
+    assert "run_payload" in {x["code"] for x in result["problems"]}
+
+
+def test_previous_run_link_with_different_files_scope_is_detected(history):
+    repo, first = history
+    second = repo.save(
+        "engineer", SCOPE, ["another-synthetic.pdf"], [FINDING], revision="rev"
+    )
+    mutate(repo, "UPDATE runs SET previous_id=? WHERE id=?", (first, second))
+    result = inspect_scoped_history(repo.path)
+    assert result["ok"] is False
+    assert "previous_link" in {x["code"] for x in result["problems"]}
+
+
+def test_future_previous_run_link_is_detected(history):
+    repo, first = history
+    second = repo.save(
+        "engineer", SCOPE, ["synthetic.pdf"], [FINDING], revision="rev"
+    )
+    mutate(repo, "UPDATE runs SET previous_id=? WHERE id=?", (second, first))
+    result = inspect_scoped_history(repo.path)
+    assert result["ok"] is False
+    assert "previous_link" in {x["code"] for x in result["problems"]}
