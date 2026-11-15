@@ -132,7 +132,7 @@ def test_saved_untrusted_findings_are_inert_in_both_exports(system):
     import csv
     from io import StringIO
     rows = list(csv.reader(StringIO(csv_response.text.lstrip("\ufeff")), delimiter=";"))
-    assert rows[1] == ["'warning" if False else "warning", "KD-012",
+    assert rows[1] == ["warning", "KD-012",
                        "'=SUM(1,2).pdf", "'+2+3", "'-4+5", "'@SUM(1,2)"]
     excel = client.get(f"/api/runs/{run_id}/xlsx")
     assert excel.status_code == 200
