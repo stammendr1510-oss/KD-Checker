@@ -24,10 +24,15 @@ RULE_SOURCES = (
     "full_set_completeness.py",
     "connection_checks.py",  # present only after PR #47 is merged
 )
-CODE = re.compile(r"\bKD-(?:(?:PE|SET)-)?\d{3}\b")
+CODE = re.compile(r"\bKD-(?:(?:PE|SET|CON)-)?\d{3}\b")
 REQUIRED_FINDING_FIELDS = {
     "severity", "code", "file", "location", "message", "recommendation",
 }
+
+
+def test_inventory_recognizes_every_catalog_code_including_staged_families():
+    # A staged code must already be recognizable before its source module lands.
+    assert all(CODE.fullmatch(code) for code in RULES)
 
 
 def test_all_current_rule_codes_have_evidence_classification():
