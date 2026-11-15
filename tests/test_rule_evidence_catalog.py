@@ -22,6 +22,7 @@ RULE_SOURCES = (
     "pair_analysis.py",
     "set_completeness.py",
     "full_set_completeness.py",
+    "connection_checks.py",  # present only after PR #47 is merged
 )
 CODE = re.compile(r"\bKD-(?:(?:PE|SET)-)?\d{3}\b")
 REQUIRED_FINDING_FIELDS = {
@@ -32,9 +33,11 @@ REQUIRED_FINDING_FIELDS = {
 def test_all_current_rule_codes_have_evidence_classification():
     observed = set()
     for relative_path in RULE_SOURCES:
-        observed.update(CODE.findall((ROOT / relative_path).read_text(encoding="utf-8")))
-    staged = {"KD-CON-101", "KD-CON-102"}  # PR #47 remains unmerged
-    assert observed <= set(RULES) and set(RULES) - observed <= staged, (
+        source = ROOT / relative_path
+        if source.exists():
+            observed.update(CODE.findall(source.read_text(encoding="utf-8")))
+    staged = set() if (ROOT / "connection_checks.py").exists() else {"KD-CON-101", "KD-CON-102"}
+    assert observed == set(RULES) - staged, (
         "Rule catalog drift: review all added/retired codes, their evidence "
         "and coverage before updating quality/rule_catalog.py"
     )
