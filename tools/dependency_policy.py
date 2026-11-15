@@ -75,6 +75,8 @@ def _source_imports(root: Path, folder: Path | None = None) -> set[str]:
     if not base.exists():
         return set()
     local_modules = {path.stem for path in root.glob("*.py")}
+    if folder is not None:
+        local_modules.update(path.stem for path in base.rglob("*.py"))
     local_packages = {
         path.name for path in root.iterdir()
         if path.is_dir() and any(path.rglob("*.py"))

@@ -84,6 +84,12 @@ class DependencyPolicyTests(unittest.TestCase):
             (root / "local_module.py").write_text("VALUE = 1\n", encoding="utf-8")
             self.assertEqual(check_repository(root), [])
 
+    def test_test_helpers_are_local_modules(self):
+        tmp, root = self.make_repo(tests="from test_fixture import make_data\n")
+        with tmp:
+            (root / "tests" / "test_fixture.py").write_text("def make_data(): return {}\n", encoding="utf-8")
+            self.assertEqual(check_repository(root), [])
+
     def test_malformed_python_source_fails_closed(self):
         tmp, root = self.make_repo(source="def broken(:\n")
         with tmp:
