@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: kd-checker-pdf-demo
+    runtime: python
+    plan: free
+    autoDeployTrigger: 'off'
+    buildCommand: python -m pip install -r requirements.txt
+    startCommand: python -m render_demo
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.12
+      - key: KD_DEMO_TOKEN
+        sync: false
+      - key: KD_DEMO_ACK
+        sync: false
