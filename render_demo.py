@@ -63,7 +63,8 @@ class DemoBoundary:
                 message["headers"] += [
                     (b"cache-control", b"no-store"),
                     (b"x-content-type-options", b"nosniff"),
-                    (b"referrer-policy", b"no-referrer"),
+                    # A native form POST under no-referrer can send Origin: null.
+                    (b"referrer-policy", b"same-origin"),
                     (b"content-security-policy",
                      b"default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"),
                 ]

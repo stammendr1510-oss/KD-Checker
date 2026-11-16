@@ -64,6 +64,36 @@ def test_auth_and_origin_are_checked_before_reading_upload():
     assert not demo.authorized("Basic " + base64.b64encode(b"demo:wrong").decode(), TOKEN.encode())
 
 
+def test_browser_form_keeps_origin_for_same_origin_post():
+    status, headers, body = request_without_loop(
+        demo.create_app(ENV), "/", headers=[(b"authorization", AUTH)]
+    )
+    assert status == 200
+    assert b'<form action="/check" method="post" enctype="multipart/form-data">' in body
+    assert headers[b"referrer-policy"] == b"same-origin"
+
+
+@pytest.mark.parametrize("path", ["/check", "/api/check", "/api/reset"])
+@pytest.mark.parametrize("origins", [
+    [], [b"null"], [b"https://another.onrender.com"],
+    [ORIGIN.replace("https:", "http:").encode()], [ORIGIN.encode(), ORIGIN.encode()],
+])
+def test_post_rejects_missing_opaque_duplicate_and_cross_site_origins(path, origins):
+    headers = [(b"authorization", AUTH), (b"referer", (ORIGIN + "/").encode())]
+    headers += [(b"origin", origin) for origin in origins]
+    assert request_without_loop(demo.create_app(ENV), path, method="POST", headers=headers)[0] == 403
+
+
+def test_same_origin_form_passes_csrf_and_keeps_authentication_and_limits():
+    app = demo.create_app(ENV)
+    headers = [(b"origin", ORIGIN.encode()), (b"content-length", b"7000000")]
+    assert request_without_loop(app, "/check", method="POST", headers=headers)[0] == 401
+    assert request_without_loop(app, "/check", method="POST",
+                                headers=headers + [(b"authorization", AUTH)])[0] == 413
+    assert request_without_loop(app, "/api/reset", method="POST",
+                                headers=headers + [(b"authorization", AUTH)])[0] == 303
+
+
 @pytest.mark.parametrize("override", [
     {"KD_DEMO_TOKEN": ""}, {"KD_DEMO_ACK": ""}, {"RENDER_EXTERNAL_HOSTNAME": "localhost"},
     {"KD_CHECKLIST_FEED_URL": ""}, {"SUPABASE_URL": ""},
@@ -105,17 +135,34 @@ def test_real_analysis_and_exports(bundle, monkeypatch, tmp_path):
     assert not list(tmp_path.iterdir())
 
 
-def test_asgi_upload_export_and_reset(bundle, monkeypatch, tmp_path):
+@pytest.mark.parametrize("upload_path", ["/api/check", "/check"])
+def test_asgi_upload_export_and_reset(bundle, monkeypatch, tmp_path, upload_path):
     monkeypatch.setattr(parser_process, "_TEMP_ROOT", tmp_path)
     auth = {"Authorization": AUTH.decode(), "Origin": ORIGIN}
     parts = [("files", (name, data, "application/pdf")) for name, data in bundle.items()]
     app = demo.create_app(ENV)
     with TestClient(app, base_url=ORIGIN, follow_redirects=False) as client:
-        assert client.post("/api/check", files=parts).status_code == 401
-        assert client.post("/api/check", files=parts * 2, headers=auth).status_code == 400
-        response = client.post("/api/check", files=parts, headers=auth)
-        assert response.status_code == 200
-        path = f'/api/runs/{response.json()["id"]}'
+        page = client.get("/", headers=auth)
+        assert page.headers["referrer-policy"] == "same-origin"
+        assert client.post(upload_path, files=parts).status_code == 401
+        assert client.post(upload_path, files=parts, headers={**auth, "Origin": "null"}).status_code == 403
+        assert client.post(upload_path, files=parts * 2, headers=auth).status_code == 400
+        response = client.post(upload_path, files=parts, headers=auth)
+        if upload_path == "/check":
+            assert response.status_code == 303
+            location = response.headers["location"]
+            assert location == "/?run=1"
+            assert "KD-PE-100" in client.get(location, headers=auth).text
+            path = "/api/runs/1"
+        else:
+            assert response.status_code == 200
+            path = f'/api/runs/{response.json()["id"]}'
+        record = client.get(path, headers=auth)
+        assert record.status_code == 200
+        expected = json.loads((TESTS / "fixtures/parser-worker-pdf-findings.json").read_bytes())
+        assert sorted(record.json()["issues"], key=lambda item: item["code"]) == sorted(
+            expected, key=lambda item: item["code"]
+        )
         assert client.get(path + "/csv", headers=auth).content.startswith(b"\xef\xbb\xbf")
         assert client.get(path + "/xlsx", headers=auth).content.startswith(b"PK")
         assert client.post("/api/reset", headers=auth).status_code == 303
