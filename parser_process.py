@@ -17,6 +17,13 @@ import time
 _GATE = threading.BoundedSemaphore(1)
 _TEMP_ROOT = None
 _WORKER = Path(__file__).resolve()
+_WINDOWS_BOOTSTRAP = (
+    'import runpy,sys; '
+    'site,script,*args=sys.argv[1:]; '
+    'sys.path.insert(0,site); '
+    'sys.argv=[script,*args]; '
+    'runpy.run_path(script,run_name="__main__")'
+)
 
 
 class ProcessingUnavailable(Exception):
@@ -120,6 +127,17 @@ def _kill(process):
     process.wait(timeout=5)
 
 
+def _worker_command(directory):
+    if os.name == 'nt':
+        # The Windows venv launcher creates a second interpreter process. The
+        # active-process=1 Job Object correctly blocks that; run the base
+        # interpreter directly and explicitly add only this venv's packages.
+        site_packages = str(Path(sys.prefix) / 'Lib' / 'site-packages')
+        return [sys._base_executable, '-I', '-S', '-c', _WINDOWS_BOOTSTRAP,
+                site_packages, str(_WORKER), '--worker', directory]
+    return [sys.executable, '-I', str(_WORKER), '--worker', directory]
+
+
 def run_check(files, config, limits=None, *, capacity=None, cancelled=None):
     limits=limits or Limits()
     if not isinstance(limits,Limits):
@@ -155,7 +173,7 @@ def run_check(files, config, limits=None, *, capacity=None, cancelled=None):
             try:
                 if os.name == 'nt':
                     job=_WindowsJob(limits)
-                process=subprocess.Popen([sys.executable,'-I',str(_WORKER),'--worker',directory],
+                process=subprocess.Popen(_worker_command(directory),
                     cwd=directory,env=env,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,start_new_session=os.name=='posix',
                     creationflags=0x08000000 if os.name=='nt' else 0)
