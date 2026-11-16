@@ -17,6 +17,7 @@ identity unchanged. Example with page and row evidence only:
   "evidence": {
     "schema_version": 1,
     "kind": "pdf_text_match",
+    "truncated": false,
     "matches": [
       {
         "designation": "1KM1",
@@ -42,7 +43,7 @@ top left. The PDF viewer applies crop and rotation transforms when placing
 an overlay. Use one box per confidently located text fragment. Omit boxes
 when the extractor cannot attribute the exact matched text to those fragments.
 
-Э3 currently provides page-level matches from `scheme_designations`.
+The legacy finding provides Э3 page-level matches from `scheme_designations`.
 Word rectangles are available from the extractor, but retaining a bounding
 box requires mapping the same accepted match to its contributing words.
 Reconstructed labels need provenance for each fragment. A whole word that
@@ -70,7 +71,24 @@ text evidence.
 - Emit evidence only for an unambiguous matched pair. Keep the existing
   informational ambiguity result when multiple Э3 or ПЭ3 candidates qualify.
 
-Acceptance cases include exact and wrapped labels, a table cell with a range,
-page-only evidence, a rotated or cropped page, the ambiguous pair, malformed
-worker output, and round-tripping both old and new saved runs. This proposal
-leaves the runtime and persisted format unchanged.
+## Worker contract
+
+`run_check` defaults to result version 1. The parent sends no version field
+and the worker emits only `status` and `issues` at the top level. Explicit
+`result_version=2` adds `result_version: 2` to both the manifest and response.
+The parent requires the requested version and rejects unsolicited evidence or
+a mismatched reply. An older worker can still serve v1. Select v2 only when the
+worker supports it.
+
+Version 2 can include `evidence` on informational KD-PE-100 findings with
+matched designations. Evidence `schema_version` is 1. It also carries a
+`truncated` boolean. Locations with `boxes_pt` carry `page_size_pt`
+as `[width, height]` in the same coordinate space. The parent checks numeric
+bounds against the reported page dimensions and ties source names to the
+submitted pair. It does not reopen documents to re-derive geometry.
+
+This implementation captures rectangles for directly located full words in
+Э3 and literal single-word ПЭ3 cells with confirmed geometry. Wrapped labels
+and expanded ranges can retain page and confirmed row evidence without boxes.
+The HTTP backend still requests v1. Exposing an opt-in run representation and
+source navigation is a separate step.
