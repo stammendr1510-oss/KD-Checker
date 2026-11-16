@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from pathlib import Path
-from extractors import Document
 from document_reference import has_document_reference
+from extractors import Document
 
 SEVERITY = {"error": "Ошибка", "warning": "Предупреждение", "info": "Информация"}
 
@@ -70,8 +70,14 @@ def analyze(docs: list[Document], cfg: dict) -> list[dict]:
                         else:
                             seen_pos[key] = ridx
                     # Heuristic only: a designation is not necessarily an attached file.
-                    if des and cfg["check_specification_references"] and not has_document_reference(des, (other.name for other in docs if other.name != d.name)):
-                        out.append(issue("warning", "KD-012", d.name, location, f"Не найден файл с обозначением «{des}»", "Проверьте комплектность; стандартные изделия могут не требовать отдельного файла"))
+                    if des and cfg["check_specification_references"] and not has_document_reference(
+                        des, (other.name for other in docs if other.name != d.name)
+                    ):
+                        out.append(issue(
+                            "warning", "KD-012", d.name, location,
+                            f"В именах загруженных файлов не найдено обозначение «{des}»",
+                            "Проверьте комплектность; стандартные изделия могут не требовать отдельного файла",
+                        ))
     if cfg["detect_duplicate_designations"]:
         for des, names in designations.items():
             # Same designation across different output formats is normal.
