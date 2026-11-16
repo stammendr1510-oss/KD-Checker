@@ -99,19 +99,30 @@ class _WindowsJob:
             self.handle=None
 
 
-def _validate_result(value):
-    if not isinstance(value,dict) or set(value) != {'status','issues'} or value['status'] != 'ok':
+def _validate_result(value, result_version=1, known_files=()):
+    envelope = {'status', 'issues'}
+    if result_version == 2:
+        envelope.add('result_version')
+    if not isinstance(value,dict) or set(value) != envelope or value['status'] != 'ok':
+        raise ProcessingUnavailable()
+    if result_version == 2 and (type(value['result_version']) is not int or value['result_version'] != 2):
         raise ProcessingUnavailable()
     issues=value['issues']
     keys={'severity','code','file','location','message','recommendation'}
     if not isinstance(issues,list) or len(issues)>10000:
         raise ProcessingUnavailable()
     for issue in issues:
-        if (not isinstance(issue,dict) or set(issue)!=keys
-                or any(not isinstance(v,str) or len(v)>16000 for v in issue.values())
+        if not isinstance(issue, dict) or set(issue) not in (keys, keys | {'evidence'}):
+            raise ProcessingUnavailable()
+        if (any(not isinstance(issue[k],str) or len(issue[k])>16000 for k in keys)
                 or issue['severity'] not in ('info','warning','error')
                 or re.fullmatch(r'KD-(?:[A-Z]+-)?\d{3}',issue['code']) is None):
             raise ProcessingUnavailable()
+        if 'evidence' in issue:
+            from pdf_match_evidence import valid_evidence
+            if (result_version != 2 or issue['code'] != 'KD-PE-100' or issue['severity'] != 'info'
+                    or not valid_evidence(issue['evidence'], known_files, issue['file'])):
+                raise ProcessingUnavailable()
     return issues
 
 
@@ -138,7 +149,9 @@ def _worker_command(directory):
     return [sys.executable, '-I', str(_WORKER), '--worker', directory]
 
 
-def run_check(files, config, limits=None, *, capacity=None, cancelled=None):
+def run_check(files, config, limits=None, *, capacity=None, cancelled=None, result_version=1):
+    if type(result_version) is not int or result_version not in (1, 2):
+        raise ValueError('Unsupported parser result version')
     limits=limits or Limits()
     if not isinstance(limits,Limits):
         raise ValueError('Explicit Limits required')
@@ -158,6 +171,8 @@ def run_check(files, config, limits=None, *, capacity=None, cancelled=None):
             root=Path(directory)
             manifest={'config':config,'limits':vars(limits),'files':[],
                       'capacity':str(capacity) if capacity is not None else None}
+            if result_version == 2:
+                manifest['result_version'] = 2
             for index,(name,content) in enumerate(files):
                 filename=f'input-{index}.bin'
                 (root/filename).write_bytes(content)
@@ -203,7 +218,7 @@ def run_check(files, config, limits=None, *, capacity=None, cancelled=None):
                     raw=stream.read(limits.output_bytes+1)
                 if len(raw)>limits.output_bytes:
                     raise ProcessingUnavailable()
-                issues=_validate_result(json.loads(raw))
+                issues=_validate_result(json.loads(raw), result_version, {name for name, _ in files})
                 if cancelled is not None and cancelled.is_set():
                     raise ProcessingUnavailable()
                 return issues
@@ -249,9 +264,15 @@ def _worker(directory):
 
 def _parse(root, manifest, limits):
     from secure_backend import check_documents
+    result_version = manifest.get('result_version', 1)
+    if type(result_version) is not int or result_version not in (1, 2):
+        return 1
     files=[(row['name'],(root/row['path']).read_bytes()) for row in manifest['files']]
-    issues=check_documents(files,manifest['config'])
-    output=json.dumps({'status':'ok','issues':issues},ensure_ascii=False,allow_nan=False).encode('utf-8')
+    issues=check_documents(files,manifest['config'],include_evidence=result_version == 2)
+    result={'status':'ok','issues':issues}
+    if result_version == 2:
+        result['result_version'] = 2
+    output=json.dumps(result,ensure_ascii=False,allow_nan=False).encode('utf-8')
     if len(output)>limits.output_bytes:
         return 1
     with (root/'result.json').open('xb') as stream:
