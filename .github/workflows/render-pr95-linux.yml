@@ -1,0 +1,39 @@
+name: Render PR 95 Linux acceptance
+
+on:
+  pull_request:
+    branches: [feature/render-free-pdf-demo]
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-pr95-linux-acceptance
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    if: >-
+      github.event.label.name == 'run-render-pr95-linux' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'ci/render-pr95-linux-acceptance'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 8074fa5737238042301179c44d17c66146a3744b
+          persist-credentials: false
+      - name: Verify checked-out SHA
+        run: test "$(git rev-parse HEAD)" = 8074fa5737238042301179c44d17c66146a3744b
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.12'
+      - name: Install Linux dependencies
+        run: |
+          python --version
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+          python -m pip check
+      - name: Run PDF and ASGI acceptance
+        run: python -m pytest -q tests/test_render_demo.py tests/test_parser_worker_pdf_bundle.py
