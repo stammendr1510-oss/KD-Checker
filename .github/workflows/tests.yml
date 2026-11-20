@@ -7,6 +7,12 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded pushes to the same PR, never jobs belonging to other PRs.
+# The latest commit still receives full Windows + Linux coverage.
+concurrency:
+  group: tests-pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
     name: Python 3.13 tests (${{ matrix.os }})
