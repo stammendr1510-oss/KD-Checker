@@ -175,13 +175,77 @@
   `connection_import`, `body_budget`, `project_configuration`,
   `quality.project_config_audit_verifier`).
 
-## Phase 6 — после Phase 5 (не начата)
+## Phase 6 — рабочее место, изоляция парсеров и приёмка (выполнено)
 
-- Phase 6: #80 → #81 → #84 → #85 → #86 → #87 → #92 → #93 → #94 → #89 → #91.
-- Render-демо #95–#98 — вне `main`.
+Порядок вливания: **#80 → #81 → #84 → #85 → #86 → #87 → #92 → #93 → #94 → #89 → #91**
+(все 11 PR перенацелены на `feature/recovery`, черновики опубликованы до merge,
+merge-коммиты без squash):
 
-Перед каждым merge stacked-ветки обязателен retarget на `feature/recovery`
-и повторный merge-check: часть PR до сих пор нацелена на родительские ветки.
+| PR | Ветка | Merge-коммит |
+|----|-------|--------------|
+| #80 | `feature/russian-secure-workbench` | `3039530` |
+| #81 | `feature/parser-process-boundary` | `13a9c5e` |
+| #84 | `feature/synthetic-acceptance-stand` | `4a1c9d8` |
+| #85 | `feature/run-provenance-snapshot` | `5244355` |
+| #86 | `feature/shared-parser-capacity` | `0ad4c19` |
+| #87 | `feature/parser-disconnect-cancellation` | `f4b8aa1` |
+| #92 | `fix/windows-parser-worker-bootstrap` | `f613f6d` |
+| #93 | `test/kd-parser-worker-pdf-bundle` | `1d936cf` |
+| #94 | `feature/kd-pe-100-evidence-v1` | `a0527ea` |
+| #89 | `test/kd-offline-pdf-acceptance` | `aca723f` |
+| #91 | `docs/kd-offline-acceptance` | `c4406b1` |
+
+- Ветки с ранее пропущенным CI (#80, #81, #84–#87) проверены локально на
+  интеграционной ветке; `[skip ci]` больше не является основанием считать их
+  непроверенными.
+- Render-демо #95–#98 не трогались и остаются вне `main`.
+
+### Разрешённые конфликты и проблемы
+
+1. **#87 ↔ #69/Phase 5, `body_budget.py`.** PR #87 переписывает
+   `BodyBudget` для наблюдения transport disconnect и импортирует `Response`
+   напрямую из `starlette.responses`; в `feature/recovery` уже был фикс
+   Phase 5 с реэкспортом `fastapi.responses`. Конфликт снят merge-коммитом
+   `ff00fa6` на ветке `feature/parser-disconnect-cancellation`: сохранена
+   логика watcher/cancellation из #87, импорт оставлен через
+   `fastapi.responses` (класс идентичен), затем PR влит как `f4b8aa1`.
+   Целевой набор `test_body_budget*` + `test_parser_disconnect` — 30 passed.
+2. **#94 ↔ #87, сигнатура `_validate_result`.** #94 расширил функцию до
+   `_validate_result(value, result_version=1, known_files=())`, а тест #87
+   подменял её функцией с одним аргументом. Исправлено отдельным коммитом
+   `fc66bc7` в `feature/recovery`: обёртка пробрасывает `*args/**kwargs`.
+   Runtime-код PR не изменялся.
+3. **F3 — браузерные тесты.** `tests/test_secure_workbench.py` требует
+   Playwright Chromium. В окружении браузер и системные библиотеки
+   отсутствовали; установлены `playwright install chromium` и
+   `playwright install-deps chromium`. После этого браузерный сценарий
+   зелёный. Это инфраструктурная предпосылка, а не дефект PR.
+
+### Чекпоинты по блокам
+
+| Блок | Состав | Результат |
+|------|--------|-----------|
+| 1 | #80, #81, #84 | `dependency_policy` — passed; **856 passed, 1 warning** |
+| 2 | #85, #86, #87 | `dependency_policy` — passed; **887 passed, 1 warning** |
+| 3 | #92, #93, #94, #89, #91 | `dependency_policy` — passed; **909 passed, 1 skipped, 1 warning** |
+
+Финальный прогон: `.venv/bin/python -m pytest -q --ignore=tests/test_issue_ui.py`
+— **909 passed, 1 skipped, 1 warning** (существующее
+StarletteDeprecationWarning про `httpx`); skipped — optional staging-тест #56.
+`tools/dependency_policy.py` — **passed** (прямых недекларированных импортов
+нет; `starlette` объявлен в #84, но `body_budget.py` продолжает использовать
+реэкспорт FastAPI).
+
+Локальный MVP не затронут: SHA-256 `storage.py`, `config.json`, `app.py`
+до и после Phase 6 совпадают
+(`4bb40ce…`, `1c137bc…`, `de17ec3…`).
+
+Новые модули/артефакты Phase 6: `parser_process.py`, `synthetic_stand.py`,
+`secure_static/workbench.*`, `source_identity.py`, `pdf_match_evidence.py`,
+`docs/parser-process-boundary.md`, `docs/parser-disconnect-cancellation.md`,
+`docs/shared-parser-capacity.md`, `docs/run-provenance.md`,
+`docs/secure-workbench.md`, `docs/synthetic-acceptance-stand.md`,
+`docs/kd-offline-acceptance.md`.
 
 ## Правила чекпоинта
 
@@ -190,3 +254,7 @@
 3. `git status --porcelain` не должен содержать изменённых runtime-файлов.
 4. Merge только без `squash` для stacked-цепочек; ветки-источники не удалять
    до завершения цепочки.
+5. Для браузерных тестов заранее установить Playwright Chromium и системные
+   зависимости (`playwright install chromium`, `playwright install-deps chromium`).
+6. При stacked-merge проверять сигнатуры monkeypatch-обёрток: поздние PR могут
+   расширять внутренние функции, которые подменяют тесты ранних PR.
