@@ -1,6 +1,8 @@
 """Bounded request admission before multipart/JSON parsing, no global monkeypatch."""
 import asyncio
+from contextlib import suppress
 import tempfile
+import threading
 from fastapi.responses import Response
 
 
@@ -52,12 +54,37 @@ class BodyBudget:
                 return await Response(status_code=400)(scope,receive,send)
             buffered.seek(0)
             exhausted = False
+            disconnected = asyncio.Event()
+            cancelled = threading.Event()
+            scope.setdefault('state', {})['parser_cancelled'] = cancelled
+
+            async def watch_disconnect():
+                # Sole consumer of the real transport once the body is admitted.
+                # Downstream receivers share the disconnect event, never race us.
+                try:
+                    await receive()
+                    # The declared body ended. Disconnect, transport failure or
+                    # unexpected extra messages all cancel further parser work.
+                except Exception:
+                    pass
+                finally:
+                    cancelled.set()
+                    disconnected.set()
+
             async def replay():
                 nonlocal exhausted
                 if exhausted:
-                    return await receive()
+                    await disconnected.wait()
+                    return {'type':'http.disconnect'}
                 chunk = buffered.read(65536)
                 more = buffered.tell() < total
                 exhausted = not more
                 return {'type':'http.request','body':chunk,'more_body':more}
-            await self.app(scope,replay,send)
+            watcher = asyncio.create_task(watch_disconnect())
+            try:
+                await self.app(scope,replay,send)
+            finally:
+                cancelled.set()
+                watcher.cancel()
+                with suppress(asyncio.CancelledError):
+                    await watcher
