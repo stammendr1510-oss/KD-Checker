@@ -1,7 +1,7 @@
 """Bounded request admission before multipart/JSON parsing, no global monkeypatch."""
 import asyncio
 import tempfile
-from starlette.responses import Response
+from fastapi.responses import Response
 
 
 class BodyBudget:
