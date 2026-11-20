@@ -1,6 +1,7 @@
 """Format readers. Extract only bounded information, never execute document content."""
 from __future__ import annotations
 import io
+from itertools import islice
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -25,7 +26,7 @@ def extract(name: str, content: bytes) -> Document:
         import fitz
         with fitz.open(stream=content, filetype="pdf") as pdf:
             d.pages = len(pdf)
-            d.text = "\n".join(page.get_text()[:150_000] for page in list(pdf)[:100])[:300_000]
+            d.text = "\n".join(page.get_text()[:150_000] for page in islice(pdf, 100))[:300_000]
             if d.pages > 100:
                 d.notes.append("Прочитаны только первые 100 страниц PDF")
     elif ext in (".xlsx", ".xlsm"):
@@ -49,8 +50,10 @@ def extract(name: str, content: bytes) -> Document:
             delimiter = dialect.delimiter
         except csv.Error:
             delimiter = ";"
-        rows = list(csv.reader(io.StringIO(text), delimiter=delimiter))[:5000]
-        d.sheets = [{"name":"CSV", "rows":[r[:40] for r in rows]}]
+        # Stop the parser at the record limit, before materializing the table.
+        # CSV records can contain quoted newlines: do not slice physical lines.
+        rows = csv.reader(io.StringIO(text), delimiter=delimiter)
+        d.sheets = [{"name":"CSV", "rows":[r[:40] for r in islice(rows, 5000)]}]
     elif ext == ".dxf":
         import ezdxf
         doc = ezdxf.read(io.StringIO(content.decode("utf-8", errors="replace")))
