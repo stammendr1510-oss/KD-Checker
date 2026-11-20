@@ -44,12 +44,45 @@
 из-за отсутствия Chromium (находка F3 плана стабилизации), к merge-ам
 отношения не имеет.
 
-## Phase 3 — история и staging (следующий шаг)
+## Phase 3 — история и staging (выполнено)
 
-Порядок: **#45 → #55 → #56 → #75 → #76 → #77 → #58 → #64 → #66**.
+Порядок вливания: **#45 → #55 → #56 → #75 → #76 → #77 → #58 → #64 → #66**
+(все 9 PR перенацелены на `feature/recovery`, merge-коммиты без squash):
 
-Контроль: `PRAGMA integrity_check` / `foreign_key_check` в тестах,
-multiprocess-сценарии, неизменность `storage.py` и `config.json`.
+| PR | Ветка | Merge-коммит |
+|----|-------|--------------|
+| #45 | `feature/verified-history-copy` | `749c8ab` |
+| #55 | `feature/scoped-history-repository` | `827057f` |
+| #56 | `feature/staging-history-import` | `0107ccf` |
+| #75 | `test/staging-import-adversarial-integrity` | `88cbcac` |
+| #76 | `quality/staging-import-readonly-preflight` | `a789661` |
+| #77 | `quality/staging-row-reconciliation` | `7bac846` |
+| #58 | `test/scoped-history-multiprocess-acceptance` | `9b48193` |
+| #64 | `test/scoped-audit-recovery-matrix` | `b982e94` |
+| #66 | `quality/scoped-audit-readonly-verifier` | `1b7e649` |
+
+- Stacked-ветки #56, #75, #76, #77, #58, #64, #66 перенацелены на
+  `feature/recovery` до merge; черновики #75, #76, #77, #58, #64, #66
+  опубликованы. Ветки-источники не удалялись.
+- Текстовых конфликтов не возникло: merge-checks чистые, локальный
+  fast-forward `c82d879 → 1b7e649` без merge-конфликтов.
+- Локальный MVP не затронут: SHA-256 `storage.py`, `config.json`, `app.py`
+  до и после Phase 3 совпадают
+  (`4bb40ce…`, `1c137bc…`, `de17ec3…`).
+
+Чекпоинт: `python tools/dependency_policy.py` — passed;
+`.venv/bin/python -m pytest -q --ignore=tests/test_issue_ui.py` —
+**570 passed, 1 warning** (Starlette/httpx), рост с 478 за счёт новых
+тестов истории/staging.
+
+Целостность SQLite на синтетических мигрированных схемах:
+
+| Схема | `integrity_check` | `foreign_key_check` | Дополнительно |
+|-------|-------------------|---------------------|---------------|
+| `storage.py` (legacy + решения/аудит) | `ok` | нарушений нет | 2 run |
+| `scoped_history.py` (scoped + транзакции) | `ok` | нарушений нет | `scoped_audit_verifier`: ok |
+| verified backup (#45) | `ok` | нарушений нет | — |
+| staging import (#56) | `ok` | нарушений нет | preflight и row reconciliation: ok, `backup_checked=true` |
 
 ## Phase 4–6 — после Phase 3
 
