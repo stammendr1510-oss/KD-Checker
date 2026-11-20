@@ -14,6 +14,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from design.access_policy import Action, Principal, Resource, Role, is_allowed
 from secure_sessions import Identity, Sessions, digest
+from body_budget import BodyBudget
 
 COOKIE = '__Host-kd_session'
 CONNECTION_PATH = '/api/connections/check'
@@ -55,7 +56,8 @@ class Login(BaseModel):
     credential: str = Field(min_length=1, max_length=4096, repr=False)
 
 
-def create_secure_app(*, verifier: Verifier, backend: Backend, sessions: Sessions, origin: str):
+def create_secure_app(*, verifier: Verifier, backend: Backend, sessions: Sessions, origin: str,
+                      body_limit=105*1024*1024, body_seconds=30):
     url = urlsplit(origin)
     if (url.scheme != 'https' or not url.hostname or url.username or url.password
             or url.path or url.query or url.fragment or origin != f'https://{url.netloc}'):
@@ -64,6 +66,9 @@ def create_secure_app(*, verifier: Verifier, backend: Backend, sessions: Session
         raise ValueError('Explicit trusted adapters and session store required')
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[url.hostname])
+    app.add_middleware(BodyBudget, limit=body_limit, seconds=body_seconds,
+                       path_limits={CONNECTION_PATH: MAX_CONNECTION_BODY,
+                                    '/auth/login':8192, '/api/config':65536})
 
     @app.exception_handler(RequestValidationError)
     async def invalid_input(request, exc):
