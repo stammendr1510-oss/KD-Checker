@@ -126,9 +126,57 @@
 - Импорт всех новых модулей Phase 4 — **OK** (включая
   `quality.durable_session_preflight`).
 
-## Phase 5–6 — после Phase 4
+## Phase 5 — соединения, проектные настройки и лимиты тела (выполнено)
 
-- Phase 5: #65 → #67 → #68 → #69 → #70 → #71 → #73 → #78 → #79.
+Порядок вливания: **#47 → #65 → #67 → #68 → #69 → #70 → #71 → #73 → #78 → #79**
+(все 10 PR перенацелены на `feature/recovery`, merge-коммиты без squash):
+
+| PR | Ветка | Merge-коммит |
+|----|-------|--------------|
+| #47 | `feature/structured-connection-checks` | `80c24eb` |
+| #65 | `feature/protected-connection-import` | `64cacee` |
+| #67 | `test/connection-api-adversarial-acceptance` | `35a7ca0` |
+| #68 | `feature/project-config-audit` | `8442a74` |
+| #69 | `feature/secure-body-budget` | `be83063` |
+| #70 | `test/config-version-history-invariants` | `68ac95c` |
+| #71 | `test/body-budget-boundary-matrix` | `a7ad23b` |
+| #73 | `quality/project-config-readonly-audit-verifier` | `68e084d` |
+| #78 | `test/two-instance-http-consistency` | `0e396fe` |
+| #79 | `test/tenant-scope-http-replay-matrix` | `da8d936` |
+
+- #47 влит первым: #65 зависит от `connection_checks`/KD-CON, поэтому без
+  него цепочка Phase 5 была бы неполной (см. примечание Phase 4).
+- Draft-ветки #67, #70, #71, #73, #78, #79 опубликованы после retarget на
+  `feature/recovery` и до merge. Ветки-источники не удалялись.
+- Merge-checks у всех 10 PR чистые; текстовых конфликтов не возникло;
+  локальный fast-forward `a3772c7 → da8d936` без конфликтов.
+- Локальный MVP не затронут: SHA-256 `storage.py`, `config.json`, `app.py`
+  до и после Phase 5 совпадают
+  (`4bb40ce…`, `1c137bc…`, `de17ec3…`).
+
+Новые модули Phase 5: `connection_checks.py`, `connection_import.py`,
+`body_budget.py`, `project_configuration.py`,
+`quality/project_config_audit_verifier.py`.
+
+На чекпоинте `tools/dependency_policy.py` обнаружил
+`undeclared-runtime-import:starlette` из-за прямого импорта в
+`body_budget.py`. Исправлено без новой зависимости: `Response` берётся через
+реэкспорт `fastapi.responses` (класс идентичен
+`starlette.responses.Response`); после правки политика проходит.
+
+Чекпоинт:
+
+- `.venv/bin/python tools/dependency_policy.py` — **passed**.
+- `.venv/bin/python -m pytest -q --ignore=tests/test_issue_ui.py` —
+  **832 passed, 1 warning** (StarletteDeprecationWarning про `httpx`),
+  рост с 721 за счёт тестов соединений, проектных настроек, body budget,
+  двух инстансов и tenant scope.
+- Импорт всех новых модулей Phase 5 — **OK** (включая `connection_checks`,
+  `connection_import`, `body_budget`, `project_configuration`,
+  `quality.project_config_audit_verifier`).
+
+## Phase 6 — после Phase 5 (не начата)
+
 - Phase 6: #80 → #81 → #84 → #85 → #86 → #87 → #92 → #93 → #94 → #89 → #91.
 - Render-демо #95–#98 — вне `main`.
 
