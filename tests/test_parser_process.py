@@ -1,8 +1,10 @@
 """Synthetic worker isolation/termination tests; no real documents or credentials."""
 from io import BytesIO, StringIO
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 import pytest
 import fitz
 from openpyxl import Workbook
@@ -82,6 +84,18 @@ def test_child_does_not_inherit_credential_environment(tmp_path,monkeypatch):
     monkeypatch.setattr(worker,'_WORKER',script)
     assert worker.run_check([('synthetic.csv',b'a;b')],CONFIG)==[]
     assert __import__('os').environ['KD_PRIVATE_TEST_SECRET']==secret
+
+
+@pytest.mark.skipif(os.name!='nt',reason='Windows Job Object bootstrap only')
+def test_windows_worker_runs_inside_single_process_job(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'_TEMP_ROOT',tmp_path)
+    command=worker._worker_command(str(tmp_path))
+    assert Path(command[0])==Path(sys._base_executable)
+    assert command[1:3]==['-I','-S']
+    assert str(Path(sys.prefix)/'Lib'/'site-packages') in command
+    files=[('synthetic.csv',synthetic('csv'))]
+    assert worker.run_check(files,CONFIG)==check_documents(files,CONFIG)
+    assert list(tmp_path.iterdir())==[]
 
 
 def test_capacity_refuses_work_without_queueing(tmp_path,monkeypatch):
