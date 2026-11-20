@@ -123,11 +123,12 @@ class ScopedBackend:
             async with request.form(max_files=100, max_fields=2) as form:
                 uploads = form.getlist('files')
                 revision = form.get('revision')
-                if not uploads or len(uploads) > 100 or not isinstance(revision, str) or not revision.strip():
+                if (set(form.keys()) - {'files', 'revision'} or len(form.getlist('revision')) != 1
+                        or not uploads or len(uploads) > 100 or not isinstance(revision, str) or not revision.strip()):
                     raise HTTPException(422, 'Files and explicit revision required')
                 files, total = [], 0
                 for upload in uploads:
-                    if not hasattr(upload, 'read'):
+                    if not hasattr(upload, 'read') or not isinstance(upload.filename, str) or not upload.filename:
                         raise HTTPException(422, 'Invalid upload')
                     name = Path(upload.filename.replace('\\', '/')).name
                     if Path(name).suffix.lower() not in SUPPORTED:

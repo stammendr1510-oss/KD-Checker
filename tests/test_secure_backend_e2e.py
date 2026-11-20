@@ -16,7 +16,8 @@ class Verifier:
     def verify(self, ticket):
         return {'engineer': Identity('engineer','org','project'),
                 'viewer': Identity('viewer','org','project'),
-                'foreign': Identity('foreign','org','other')}.get(ticket)
+                'foreign': Identity('foreign','org','other'),
+                'external': Identity('external','other-org','project')}.get(ticket)
 
 def login(client, ticket):
     r = client.post('/auth/login', json={'credential':ticket}, headers={'origin':ORIGIN})
@@ -31,12 +32,14 @@ def pdf():
 def test_real_http_pipeline_and_isolation(tmp_path):
     repo = Repository.create(tmp_path/'scoped.sqlite3')
     scope = Scope('org','project')
-    for user, role, project in [('engineer','engineer','project'),('viewer','viewer','project'),('foreign','engineer','other')]:
-        repo.provision(user,Scope('org',project),role)
+    for user, role, project in [('engineer','engineer','project'),('viewer','viewer','project'),('foreign','engineer','other'),('external','engineer','project')]:
+        repo.provision(user,Scope('other-org' if user == 'external' else 'org',project),role)
     app = create_secure_app(verifier=Verifier(), backend=ScopedBackend(repo), sessions=Sessions(), origin=ORIGIN)
     with TestClient(app,base_url=ORIGIN) as client:
         assert client.get('/api/runs').status_code == 401
         headers = login(client,'engineer')
+        assert client.post('/api/check',files={'files':('synthetic.pdf',pdf(),'application/pdf')},
+                           data={'revision':'rev','organization_id':'spoof'},headers=headers).status_code == 422
         def check():
             r = client.post('/api/check', files={'files':('synthetic.pdf',pdf(),'application/pdf')},
                             data={'revision':'synthetic-rev'},headers=headers)
@@ -52,6 +55,8 @@ def test_real_http_pipeline_and_isolation(tmp_path):
         assert len(events) == 1 and events[0]['actor'] == 'engineer'
         second = check()
         assert all(s['status'] == 'new' for s in second['finding_states'])
+        assert client.get(f"/api/runs/{second['id']}/findings/{fid}/history").status_code == 404
+        assert client.patch(url,json={'status':'new','comment':'stale','expected_version':0},headers=headers).status_code == 409
         assert client.get(f"/api/runs/{second['id']}/compare/{first['id']}").json()['summary']['persisting'] > 0
         assert client.get(f"/api/runs/{first['id']}/csv").status_code == 200
         report = client.get(f"/api/runs/{first['id']}/xlsx")
@@ -66,6 +71,9 @@ def test_real_http_pipeline_and_isolation(tmp_path):
             assert client.get(f"/api/runs/{first['id']}{suffix}").status_code == 404
         other = client.post('/api/check',files={'files':('other.pdf',pdf(),'application/pdf')},data={'revision':'rev'},headers=foreign).json()
         assert client.get(f"/api/runs/{other['id']}/compare/{first['id']}").status_code == 404
+        foreign = login(client,'external')
+        assert client.get('/api/runs').json() == []
+        assert client.get(f"/api/runs/{first['id']}/xlsx").status_code == 404
         old = client.cookies.get(COOKIE)
         assert client.post('/auth/logout',headers=foreign).status_code == 200
         client.cookies.set(COOKIE,old)
@@ -88,3 +96,32 @@ def test_membership_revoked_between_http_gate_and_repository_write(tmp_path, mon
         assert r.status_code == 403
     with repo.transaction() as con:
         assert con.execute('SELECT count(*) FROM runs').fetchone()[0] == 0
+
+
+def test_scoped_database_backup_restore_through_fresh_http_app(tmp_path):
+    import sqlite3
+    repo = Repository.create(tmp_path/'original.sqlite3')
+    repo.provision('engineer',Scope('org','project'),'engineer')
+    def app(repository):
+        return create_secure_app(verifier=Verifier(),backend=ScopedBackend(repository),sessions=Sessions(),origin=ORIGIN)
+    with TestClient(app(repo),base_url=ORIGIN) as client:
+        headers = login(client,'engineer')
+        run = client.post('/api/check',files={'files':('synthetic.pdf',pdf(),'application/pdf')},data={'revision':'rev'},headers=headers).json()
+        fid = run['finding_states'][0]['id']
+        url = f"/api/runs/{run['id']}/findings/{fid}"
+        assert client.patch(url,json={'status':'resolved','comment':'Restored synthetic decision','expected_version':0},headers=headers).status_code == 200
+        old_cookie = client.cookies.get(COOKIE)
+    # Stopped synthetic application; copy to a new file, never replace source.
+    destination = tmp_path/'restored.sqlite3'
+    with closing(sqlite3.connect(repo.path)) as source, closing(sqlite3.connect(destination)) as target:
+        source.backup(target)
+    with TestClient(app(Repository(destination)),base_url=ORIGIN) as client:
+        client.cookies.set(COOKIE,old_cookie)
+        assert client.get(f"/api/runs/{run['id']}").status_code == 401
+        login(client,'engineer')
+        record = client.get(f"/api/runs/{run['id']}").json()
+        assert record['finding_states'][0]['comment'] == 'Restored synthetic decision'
+        assert record['finding_states'][0]['version'] == 1
+        events = client.get(url+'/history').json()
+        assert len(events) == 1 and events[0]['actor'] == 'engineer'
+        assert client.get(f"/api/runs/{run['id']}/xlsx").status_code == 200
