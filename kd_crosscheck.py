@@ -4,6 +4,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 import fitz
+from pdf_match_evidence import MAX_LOCATIONS, MAX_MATCHES, location_key, source
 
 # Identify components in the electrical scheme primarily from unambiguous wire tags.
 TAG_PREFIX = r'(?:[123])?(?:QF|SF|KM|KK|KV|KT|TA|SB|HLG|HLW|XG|XT|XN|XL|X|PAV)'
@@ -189,7 +190,7 @@ def _duplicate_column_bounds(page, band):
         return None
     return left, right
 
-def get_spec_rows(pdf_bytes):
+def get_spec_rows(pdf_bytes, *, include_evidence=False):
     """Read designator column and qty using original PDF word coordinates.
     Only rows with an identifiable numeric qty and designator are accepted.
     """
@@ -226,6 +227,10 @@ def get_spec_rows(pdf_bytes):
                                  'table_row':rules.index(band[0])+1 if band else None,
                                  'duplicate_eligible':bool(band and band[0]>=50 and contained and complete and not unknown
                                                            and _duplicate_range_spelling_is_exact(notation))})
+                    if include_evidence and contained and complete and len(des) == 1:
+                        word = des[0]
+                        if TAG.fullmatch(word[4]) and normalized(word[4]) in entries:
+                            rows[-1]["literal_box"] = (word[:4], (page.cropbox.width, page.cropbox.height))
     return rows
 
 
@@ -331,22 +336,62 @@ def _unconfirmed_pe3_context(rows, examples):
     return " Места в ПЭ3: " + " | ".join(locations) + "." if locations else ""
 
 
-def run(e3_filename,e3_bytes,pe_filename,pe_bytes):
+def _match_evidence(overlap, scheme_sources, scheme_pages, rows, pe_filename):
+    matches = []
+    truncated = len(overlap) > MAX_MATCHES
+    for designation in overlap[:MAX_MATCHES]:
+        scheme = scheme_sources[designation]
+        truncated |= len(scheme_pages[designation]) > MAX_LOCATIONS or any(capped for _, capped in scheme)
+        elements = {}
+        for row in rows:
+            if designation not in row["entries"]:
+                continue
+            table_row = row.get("table_row") if row.get("row_band") is not None else None
+            box, size = row.get("literal_box", ((), ()))
+            location, _ = source(pe_filename, row["page"], table_row, size=size, boxes=[box])
+            key = location_key(location)
+            if key not in elements or "boxes_pt" in location:
+                elements[key] = location
+        truncated |= len(elements) > MAX_LOCATIONS
+        matches.append({
+            "designation": designation,
+            "scheme": [location for location, _ in scheme],
+            "element_list": [elements[key] for key in sorted(elements)[:MAX_LOCATIONS]],
+        })
+    return {"schema_version": 1, "kind": "pdf_text_match", "matches": matches, "truncated": truncated}
+
+
+def run(e3_filename,e3_bytes,pe_filename,pe_bytes, *, include_evidence=False):
     findings=[]
-    rows=get_spec_rows(pe_bytes)
+    rows=get_spec_rows(pe_bytes, include_evidence=True) if include_evidence else get_spec_rows(pe_bytes)
     if not rows:
         return [issue('warning','KD-PE-000',pe_filename,'PDF','Не удалось надёжно извлечь строки перечня элементов','Используйте структурированную выгрузку или Excel для точной сверки')]
     scheme=set(); script_candidates=defaultdict(set); scheme_pages=defaultdict(set)
     script_form_pages=defaultdict(lambda: defaultdict(set))
+    spec=set().union(*(r['entries'] for r in rows))
+    scheme_sources=defaultdict(list)
     with fitz.open(stream=e3_bytes, filetype='pdf') as pdf:
         for pi,page in enumerate(pdf):
+            matched_on_page = set()
             for value in scheme_designations(page):
                 n=normalized(value)
                 scheme.add(n)
                 script_candidates[n].add(value)
                 scheme_pages[n].add(pi+1)
                 script_form_pages[n][value].add(pi+1)
-    spec=set().union(*(r['entries'] for r in rows))
+                if include_evidence and n in spec and len(scheme_sources[n]) < MAX_LOCATIONS:
+                    matched_on_page.add(n)
+            if matched_on_page:
+                boxes = defaultdict(list)
+                for word in page.get_text('words', sort=True):
+                    designation = normalized(word[4])
+                    if designation in matched_on_page and TAG.fullmatch(word[4]):
+                        boxes[designation].append(word[:4])
+                for designation in matched_on_page:
+                    scheme_sources[designation].append(source(
+                        e3_filename, pi+1, size=(page.cropbox.width, page.cropbox.height),
+                        boxes=boxes[designation],
+                    ))
     # No blanket "missing" reporting: drawings may contain auxiliary devices,
     # split representations and OCR/text-order artifacts.
     for r in rows:
@@ -378,6 +423,8 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes):
         examples.append(f'{designation}: лист(ы) PDF {visible}{extra}')
     match_context = ' Примеры совпадений в Э3: ' + '; '.join(examples) + '.' if examples else ''
     findings.append(issue('info','KD-PE-100',pe_filename,'Сопоставление Э3 ↔ ПЭ3',f'Из ПЭ3 извлечено {len(rows)} строк с обозначениями и количеством; уникальных обозначений — {len(spec)}. Из текста Э3 распознано {len(scheme)} обозначений; совпадений — {len(overlap)}.' + match_context,'Для проверки полноты сопоставьте исходные Э3 и ПЭ3 или структурированный экспорт проекта. Это выборочная машинная сверка: отсутствие замечаний не подтверждает полноту схем и перечня'))
+    if include_evidence and overlap:
+        findings[-1]["evidence"] = _match_evidence(overlap, scheme_sources, scheme_pages, rows, pe_filename)
     missing=sorted(spec-scheme)
     if missing:
         context = _unconfirmed_pe3_context(rows, missing[:8])

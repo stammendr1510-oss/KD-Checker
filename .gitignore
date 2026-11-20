@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local runtime data
+data/
+*.sqlite3
+*.sqlite3-*
+*.bak
+config.local.json
+
+# Secrets and environment
+.env
+.env.*
+!.env.example
+
+# Test and tool artifacts
+test-results/
+playwright-report/
+blob-report/
+*.log
+
+# OS and editors
+.DS_Store
+Thumbs.db
+
+# Local assistant tooling
+.codeassistant/

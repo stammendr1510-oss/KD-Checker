@@ -1,0 +1,10 @@
+[tool.pytest.ini_options]
+minversion = "8.0"
+# `test_free_cycle.py` лежит в корне и содержит 7 тестов планировщика;
+# без явного указания он выпал бы из штатного прогона.
+testpaths = ["tests", "test_free_cycle.py"]
+pythonpath = ["."]
+addopts = "-ra"
+markers = [
+    "ui: браузерные тесты Playwright, требуют установленный Chromium",
+]
