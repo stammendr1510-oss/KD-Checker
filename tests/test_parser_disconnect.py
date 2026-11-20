@@ -186,8 +186,8 @@ sys.exit(parser_process._worker(sys.argv[2]))
 def test_cancellation_during_result_validation_never_returns_findings(tmp_path,monkeypatch):
     cancel=threading.Event()
     actual=worker._validate_result
-    def cancelled_result(value):
-        issues=actual(value)
+    def cancelled_result(value,*args,**kwargs):
+        issues=actual(value,*args,**kwargs)
         cancel.set()
         return issues
     monkeypatch.setattr(worker,'_validate_result',cancelled_result)
