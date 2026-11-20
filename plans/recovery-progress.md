@@ -84,9 +84,50 @@
 | verified backup (#45) | `ok` | нарушений нет | — |
 | staging import (#56) | `ok` | нарушений нет | preflight и row reconciliation: ok, `backup_checked=true` |
 
-## Phase 4–6 — после Phase 3
+## Phase 4 — secure core (выполнено)
 
-- Phase 4: #52 → #59 → #60 → #61 → #62 → #63 → #74.
+Порядок вливания: **#52 → #59 → #60 → #61 → #62 → #63 → #74**
+(все 7 PR перенацелены на `feature/recovery`, merge-коммиты без squash):
+
+| PR | Ветка | Merge-коммит |
+|----|-------|--------------|
+| #52 | `feature/secure-api-boundary` | `ad3ad9e` |
+| #59 | `feature/secure-real-backend` | `7e6aa2b` |
+| #60 | `feature/durable-test-sessions` | `db171b4` |
+| #61 | `test/secure-e2e-revocation-acceptance` | `cd7fff5` |
+| #62 | `test/secure-http-adversarial-uploads` | `42145a0` |
+| #63 | `test/durable-sessions-failclosed-matrix` | `4ac714a` |
+| #74 | `quality/durable-session-offline-preflight` | `7677406` |
+
+- #52 и #59 были открыты; черновики #61, #62, #63, #74 опубликованы после
+  retarget на `feature/recovery` и до merge. Ветки-источники не удалялись.
+- Merge-checks у всех 7 PR чистые, текстовых конфликтов не возникло.
+- #59 не импортирует `connection_checks`/`KD-CON`, поэтому зависимость от
+  #47 на этом этапе не требуется: #47 остаётся в Phase 5 вместе с #65.
+- Локальный MVP не затронут: SHA-256 `storage.py`, `config.json`, `app.py`
+  до и после Phase 4 совпадают
+  (`4bb40ce…`, `1c137bc…`, `de17ec3…`).
+
+Новые модули Phase 4: `secure_api.py`, `secure_sessions.py`,
+`secure_backend.py`, `durable_sessions.py`,
+`quality/durable_session_preflight.py`.
+
+На чекпоинте `tools/dependency_policy.py` сначала обнаружил
+`undeclared-runtime-import:starlette` из-за прямого импорта в
+`secure_api.py`. Исправлено без новой зависимости: middleware берётся через
+реэкспорт `fastapi.middleware.trustedhost`; после правки политика проходит.
+
+Чекпоинт:
+
+- `.venv/bin/python tools/dependency_policy.py` — **passed**.
+- `.venv/bin/python -m pytest -q --ignore=tests/test_issue_ui.py` —
+  **721 passed, 1 warning** (StarletteDeprecationWarning про `httpx`/`httpx2`),
+  рост с 570 за счёт HTTP/RBAC, durable-сессий и preflight-тестов.
+- Импорт всех новых модулей Phase 4 — **OK** (включая
+  `quality.durable_session_preflight`).
+
+## Phase 5–6 — после Phase 4
+
 - Phase 5: #65 → #67 → #68 → #69 → #70 → #71 → #73 → #78 → #79.
 - Phase 6: #80 → #81 → #84 → #85 → #86 → #87 → #92 → #93 → #94 → #89 → #91.
 - Render-демо #95–#98 — вне `main`.
