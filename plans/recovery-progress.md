@@ -247,6 +247,34 @@ StarletteDeprecationWarning про `httpx`); skipped — optional staging-тес
 `docs/secure-workbench.md`, `docs/synthetic-acceptance-stand.md`,
 `docs/kd-offline-acceptance.md`.
 
+## Phase 7 — публикация в GitHub (выполняется)
+
+- Квота GitHub Actions подтверждена владельцем, поэтому Draft PR публикуется
+  штатно, без `[skip ci]`.
+- Обнаружено расхождение: артефакты Phase 0 (`.gitignore`, `.gitattributes`,
+  `pyproject.toml`, `docs/stabilization-baseline.md`,
+  `plans/pr-recovery-audit.md`, `plans/stabilization-roadmap.md`) остались
+  только в `chore/stabilization-bootstrap` (`6a652cc`) и отсутствовали в
+  `feature/recovery`. Перенесены в ветку.
+- Отличие от `6a652cc`: `testpaths = ["tests", "test_free_cycle.py"]`, иначе
+  корневые 7 тестов планировщика выпадают из штатного прогона.
+- `tests/test_engine.py` очищен от ручного `sys.path` (как в `6a652cc`).
+- Аудит перед публикацией: в индексе нет `.env`, токенов, паролей,
+  локальных БД, `data/`, реальных документов; единственная фикстура —
+  `tests/fixtures/parser-worker-pdf-findings.json`.
+
+Чекпоинт публикации:
+
+- `tools/dependency_policy.py` — **passed**.
+- `.venv/bin/python -m pytest -q` — **914 passed, 1 skipped, 1 warning**
+  (skip: Windows Job Object bootstrap; warning: Starlette/httpx).
+- `.venv/bin/python -m pytest -q --ignore=tests/test_issue_ui.py` —
+  **909 passed, 1 skipped, 1 warning**.
+- Браузерные `test_issue_ui.py` + `test_secure_workbench.py` — **7 passed**.
+- Импорт всех модулей Phase 4–6 и `quality/*` — **ok**.
+- SHA-256 `storage.py`, `config.json`, `app.py` — без изменений
+  (`4bb40ce…`, `1c137bc…`, `de17ec3…`).
+
 ## Правила чекпоинта
 
 1. После каждого блока — `python tools/dependency_policy.py`.
