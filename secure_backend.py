@@ -2,6 +2,7 @@
 import csv
 import io
 import json
+import asyncio
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -19,6 +20,7 @@ from kd_crosscheck import designation_type, pair_key, check_spec_duplicates, run
 from excel_reports import build_excel_report
 from connection_import import parse_connections
 from project_configuration import ProjectConfiguration
+from parser_process import run_check, Limits, ProcessingUnavailable
 
 
 class Decision(BaseModel):
@@ -55,8 +57,11 @@ def check_documents(files, cfg):
 
 
 class ScopedBackend:
-    def __init__(self, repository):
+    def __init__(self, repository, *, parser_limits=None):
         self.repo = repository
+        self.parser_limits = parser_limits or Limits()
+        if not isinstance(self.parser_limits, Limits):
+            raise ValueError('Explicit parser Limits required')
         with repository.transaction(True) as con:
             con.execute('''CREATE TABLE IF NOT EXISTS http_findings(id INTEGER PRIMARY KEY AUTOINCREMENT,
                 org TEXT, project TEXT, run_id INTEGER, ordinal INTEGER, UNIQUE(org,project,run_id,ordinal),
@@ -107,6 +112,8 @@ class ScopedBackend:
             raise HTTPException(404, 'Not found') from None
         except Conflict:
             raise HTTPException(409, 'Version conflict') from None
+        except ProcessingUnavailable:
+            raise HTTPException(503, 'Document processing unavailable') from None
         except ValueError:
             raise HTTPException(422, 'Invalid request') from None
 
@@ -148,7 +155,7 @@ class ScopedBackend:
                     if len(content) > 20*1024*1024 or total > 100*1024*1024:
                         raise HTTPException(413, 'Upload budget exceeded')
                     files.append((name, content))
-                issues = check_documents(files, self.config(identity))
+                issues = await asyncio.to_thread(run_check, files, self.config(identity), self.parser_limits)
                 # save() rechecks live membership INSIDE its write transaction.
                 identifier = self.repo.save(actor, scope, [f[0] for f in files], issues, revision=revision)
                 return self.record(identity, identifier)
