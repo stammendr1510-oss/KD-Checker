@@ -61,11 +61,11 @@ def test_configuration_change_after_selection_retains_actual_worker_snapshot(sys
     repo,backend,app=system
     selected,release=threading.Event(),threading.Event()
     actual=secure_backend.run_check
-    def paused(files,cfg,limits):
+    def paused(files,cfg,limits,**kwargs):
         # Real worker is paused just after HTTP selected its config; no fake results.
         selected.set()
         if not release.wait(timeout=10): raise RuntimeError('Synthetic gate timeout')
-        return actual(files,cfg,limits)
+        return actual(files,cfg,limits,**kwargs)
     monkeypatch.setattr(secure_backend,'run_check',paused)
     with TestClient(app,base_url=ORIGIN) as engineer, TestClient(app,base_url=ORIGIN) as admin:
         headers=login(engineer,'engineer')
