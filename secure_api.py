@@ -16,6 +16,9 @@ from design.access_policy import Action, Principal, Resource, Role, is_allowed
 from secure_sessions import Identity, Sessions, digest
 
 COOKIE = '__Host-kd_session'
+CONNECTION_PATH = '/api/connections/check'
+EXTRA_ROUTES = {('POST', CONNECTION_PATH): Action.CHECK}
+MAX_CONNECTION_BODY = 512 * 1024
 # Every current local API operation, reviewed against PR #38.
 ROUTES = {
     ('GET', '/api/config'): Action.READ,
@@ -138,7 +141,16 @@ def create_secure_app(*, verifier: Verifier, backend: Backend, sessions: Session
                 raise HTTPException(403, 'Request denied')
             if method not in ('GET', 'HEAD'):
                 csrf_origin(request, record)
-                if request.headers.get('content-type', '').split(';')[0] == 'application/json':
+                if path == CONNECTION_PATH:
+                    if request.headers.get('content-type', '').split(';')[0].lower() != 'application/json':
+                        raise HTTPException(415, 'JSON required')
+                    raw = bytearray()
+                    async for chunk in request.stream():
+                        if len(raw) + len(chunk) > MAX_CONNECTION_BODY:
+                            raise HTTPException(413, 'Input budget exceeded')
+                        raw.extend(chunk)
+                    request.state.connection_input = bytes(raw)
+                elif request.headers.get('content-type', '').split(';')[0] == 'application/json':
                     try:
                         data = await request.json()
                     except ValueError:
@@ -168,6 +180,6 @@ def create_secure_app(*, verifier: Verifier, backend: Backend, sessions: Session
             return result
         return guarded
 
-    for (method, path), action in ROUTES.items():
+    for (method, path), action in (ROUTES | EXTRA_ROUTES).items():
         app.add_api_route(path, endpoint(method, path, action), methods=[method])
     return app

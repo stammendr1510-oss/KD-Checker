@@ -17,6 +17,7 @@ from document_identity import pdf_identity_findings, unique_pdf_analysis_sources
 from pair_analysis import pair_analysis_plan
 from kd_crosscheck import designation_type, pair_key, check_spec_duplicates, run as crosscheck
 from excel_reports import build_excel_report
+from connection_import import parse_connections
 
 
 class Decision(BaseModel):
@@ -114,6 +115,12 @@ class ScopedBackend:
 
     async def _dispatch(self, method, path, identity, request):
         scope, actor = Scope(identity.organization, identity.project), identity.subject
+        if path == '/api/connections/check':
+            payload, files, issues = parse_connections(request.state.connection_input)
+            if payload.project != identity.project:
+                raise HTTPException(404, 'Not found')
+            identifier = self.repo.save(actor, scope, files, issues, revision=payload.revision)
+            return self.record(identity, identifier)
         if path == '/api/config':
             if method == 'GET':
                 return self.config(identity)
