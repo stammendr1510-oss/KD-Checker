@@ -25,3 +25,8 @@ def test_empty_or_non_text_reference_never_matches():
 
 def test_empty_document_list_never_matches():
     assert not has_document_reference("AB.2", [])
+
+
+def test_numeric_continuation_is_a_distinct_designation():
+    assert not has_document_reference("AB.2", ["AB.2.1.pdf"])
+    assert has_document_reference("AB.2", ["AB.2.ВО.pdf"])
