@@ -8,8 +8,8 @@
 |----------|----------|
 | PR | **#100**, статус `draft` |
 | Ветка | `feature/recovery` → `main` |
-| Ссылка (SourceCraft) | <https://sourcecraft.dev/stammendrs1510/kd-checker/pull/100> |
-| Зеркало GitHub | `stammendr1510-oss/KD-Checker`, PR #100 (приватный репозиторий, доступ по приглашению) |
+| Ссылка (SourceCraft) | <https://sourcecraft.dev/stammendrs1510/kd-checker/pr/100> |
+| Зеркало GitHub | `stammendr1510-oss/KD-Checker`, PR #100 (приватный репозиторий, прямой URL без авторизации отдаёт 404) |
 | База | `main` = `b97729e2451caad282240e181b959c70549a125f` |
 | Merge | **не выполнялся и не планируется** до независимой приёмки |
 
