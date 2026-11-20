@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from fastapi import HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from design.access_policy import Role
 from scoped_history import Scope, Denied, Missing, Conflict
@@ -18,6 +18,7 @@ from pair_analysis import pair_analysis_plan
 from kd_crosscheck import designation_type, pair_key, check_spec_duplicates, run as crosscheck
 from excel_reports import build_excel_report
 from connection_import import parse_connections
+from project_configuration import ProjectConfiguration
 
 
 class Decision(BaseModel):
@@ -62,6 +63,7 @@ class ScopedBackend:
                 FOREIGN KEY(org,project,run_id,ordinal) REFERENCES decisions(org,project,run_id,ordinal))''')
             con.execute('''CREATE TABLE IF NOT EXISTS project_config(org TEXT, project TEXT, payload TEXT,
                 PRIMARY KEY(org,project), FOREIGN KEY(org,project) REFERENCES projects(org,project))''')
+        self.project_configuration = ProjectConfiguration(repository)
 
     def role(self, identity):
         with self.repo.transaction() as con:
@@ -80,12 +82,7 @@ class ScopedBackend:
             return row[0] if row else None
 
     def config(self, identity):
-        scope = Scope(identity.organization, identity.project)
-        with self.repo.transaction() as con:
-            self.repo._member(con, identity.subject, scope)
-            row = con.execute('SELECT payload FROM project_config WHERE org=? AND project=?',
-                              (scope.organization, scope.project)).fetchone()
-            return json.loads(row[0]) if row else json.loads((Path(__file__).parent/'config.json').read_text(encoding='utf-8'))
+        return self.project_configuration.read(identity)[0]
 
     def record(self, identity, run_id):
         scope = Scope(identity.organization, identity.project)
@@ -123,9 +120,15 @@ class ScopedBackend:
             return self.record(identity, identifier)
         if path == '/api/config':
             if method == 'GET':
-                return self.config(identity)
-            # Shared local config is intentionally never modified by this adapter.
-            raise HTTPException(409, 'Project configuration editing is not enabled')
+                settings, version = self.project_configuration.read(identity)
+                return JSONResponse(settings,headers={'X-Config-Version':str(version)})
+            data = await request.json()
+            if not isinstance(data,dict) or 'expected_version' not in data:
+                raise HTTPException(409,'Expected configuration version required')
+            settings, version = self.project_configuration.update(identity,data)
+            return {'settings':settings,'version':version}
+        if path == '/api/config/history':
+            return self.project_configuration.history(identity)
         if path == '/api/check':
             async with request.form(max_files=100, max_fields=2) as form:
                 uploads = form.getlist('files')

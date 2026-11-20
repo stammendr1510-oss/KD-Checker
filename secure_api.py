@@ -17,7 +17,8 @@ from secure_sessions import Identity, Sessions, digest
 
 COOKIE = '__Host-kd_session'
 CONNECTION_PATH = '/api/connections/check'
-EXTRA_ROUTES = {('POST', CONNECTION_PATH): Action.CHECK}
+EXTRA_ROUTES = {('POST', CONNECTION_PATH): Action.CHECK,
+                ('GET', '/api/config/history'): Action.READ}
 MAX_CONNECTION_BODY = 512 * 1024
 # Every current local API operation, reviewed against PR #38.
 ROUTES = {
