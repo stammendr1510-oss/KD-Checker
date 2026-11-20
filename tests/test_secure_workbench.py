@@ -36,6 +36,13 @@ def test_public_shell_contains_no_data_and_context_requires_current_membership(s
     assert response.status_code==200
     assert 'frame-ancestors' in response.headers['content-security-policy']
     assert response.headers['cache-control']=='no-store'
+    from html.parser import HTMLParser
+    forms=[]
+    class Forms(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            if tag=='form': forms.append(dict(attrs))
+    Forms().feed(response.text)
+    assert forms and all(form.get('method','get').lower()=='post' for form in forms)
     assert client.get('/auth/context').status_code==401
     assert client.post('/workbench').status_code==401
     client.post('/auth/login',json={'credential':'engineer'},headers={'origin':ORIGIN})
