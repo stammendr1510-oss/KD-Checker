@@ -33,7 +33,7 @@ class Decision(BaseModel):
     expected_version: int = Field(ge=0, strict=True)
 
 
-def check_documents(files, cfg):
+def check_documents(files, cfg, *, include_evidence=False):
     docs, failures, sources, pairs = [], [], [], []
     for name, content in files:
         try:
@@ -55,7 +55,7 @@ def check_documents(files, cfg):
     plan, notices = pair_analysis_plan(unique)
     issues += notices
     for scheme, spec in plan:
-        issues += crosscheck(scheme[0], scheme[3], spec[0], spec[3])
+        issues += crosscheck(scheme[0], scheme[3], spec[0], spec[3], include_evidence=include_evidence)
     return issues
 
 
