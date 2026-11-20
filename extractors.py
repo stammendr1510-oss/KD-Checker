@@ -50,8 +50,10 @@ def extract(name: str, content: bytes) -> Document:
             delimiter = dialect.delimiter
         except csv.Error:
             delimiter = ";"
-        rows = list(csv.reader(io.StringIO(text), delimiter=delimiter))[:5000]
-        d.sheets = [{"name":"CSV", "rows":[r[:40] for r in rows]}]
+        # Stop the parser at the record limit, before materializing the table.
+        # CSV records can contain quoted newlines: do not slice physical lines.
+        rows = csv.reader(io.StringIO(text), delimiter=delimiter)
+        d.sheets = [{"name":"CSV", "rows":[r[:40] for r in islice(rows, 5000)]}]
     elif ext == ".dxf":
         import ezdxf
         doc = ezdxf.read(io.StringIO(content.decode("utf-8", errors="replace")))
