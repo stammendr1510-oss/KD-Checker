@@ -1,5 +1,10 @@
 # KD-PE-105: диагностическая база (блок 1)
 
+> **Обновление блока 2.** Описанные ниже `ambiguous_row`, `confidence=high` при
+> `reason=ambiguous_row` и привязка KM к строке с количеством 1 **исправлены**.
+> Новый алгоритм, причины и инварианты: [`docs/kd-pe-105-matching-evidence.md`](kd-pe-105-matching-evidence.md).
+> Этот документ сохранён как воспроизводимая диагностика исходного дефекта.
+
 Дата: 21.11.2026. Ветка: `diagnostics/kd-pe-105-baseline` от
 `a968ef8d533281369dfecdc99df6615cba771e24` (`feature/e3-pe3-missing-designations`).
 

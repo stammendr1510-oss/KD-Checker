@@ -9,8 +9,11 @@
   (`be3b368`, поверх `a968ef8`).
 - Ветка блока 2: `feature/kd-pe-105-matching-evidence`
   (создана от `diagnostics/kd-pe-105-baseline`).
-- Draft PR: создаётся в SourceCraft, база — `diagnostics/kd-pe-105-baseline`
-  (stacked PR, блок 2 не смешивается с диагностикой блока 1).
+- SHA кода и тестов блока 2: `ad51127e18ab2baea4fbece1733c22f6b84e9287`.
+- SourceCraft Draft PR: **№104**,
+  `feature/kd-pe-105-matching-evidence` → `diagnostics/kd-pe-105-baseline`,
+  статус `draft`.
+  - `https://sourcecraft.dev/stammendrs1510/kd-checker/pulls/104`
 - `main`, production, Supabase и EPLAN Checklist не изменялись.
 
 ## 2. Цель блока 2
