@@ -62,7 +62,11 @@ CONFIDENCE_LEVELS = frozenset({"high", "medium", "low"})
 STATUSES = frozenset({"evaluated", "not_evaluated"})
 REASONS = frozenset({
     "quantity_mismatch", "reference_only", "no_text_layer", "pe3_not_parsed",
-    "truncated", "ambiguous_row", "no_matching_pe3_row",
+    "truncated", "no_matching_pe3_row", "row_matched_without_coverage",
+    "row_ambiguous",
+    # Deprecated: emitted by schema v1 before block 2. Kept readable so old
+    # stored details can still be inspected, but never produced again.
+    "ambiguous_row",
 })
 REASON_LABELS = {
     "quantity_mismatch": "количество в ПЭ3 не совпадает с раскрытыми обозначениями",
@@ -70,9 +74,23 @@ REASON_LABELS = {
     "no_text_layer": "в PDF Э3 не обнаружен текстовый слой",
     "pe3_not_parsed": "позиционные обозначения ПЭ3 не извлечены достоверно",
     "truncated": "обработка PDF ограничена",
-    "ambiguous_row": "невозможно однозначно сопоставить строку ПЭ3",
     "no_matching_pe3_row": "не найдена строка ПЭ3 с подходящим типом",
+    "row_matched_without_coverage": (
+        "строка ПЭ3 похожа по типу и группе, но не доказывает принадлежность обозначения"
+    ),
+    "row_ambiguous": (
+        "несколько строк ПЭ3 одинаково подходят; выбор строки не выполняется"
+    ),
+    "ambiguous_row": "устаревшая причина: неоднозначная строка ПЭ3",
 }
+
+# Evidence classes for row attribution. Only ``under_expanded`` is proof that a
+# row is under-specified; family/group coincidence stays tentative.
+MATCH_EXACT = "exact"
+MATCH_UNDER_EXPANDED = "under_expanded"
+MATCH_FAMILY_GROUP = "family_group"
+MATCH_FAMILY_ONLY = "family_only"
+MATCH_NONE = "none"
 
 NOTE_RE = re.compile(
     r"(?:\bсм\b|\bприм(?:еч)?|\bтабл|\bсоответств|\bпоз\.?|\bобознач|"
@@ -314,30 +332,87 @@ def _row_key(row):
             tuple(sorted(row.get("entries") or set())))
 
 
-def _row_score(component, row):
+def _group_compatible(designation, entries):
+    """A designation without a leading group is compatible with any row.
+
+    Group identity is *not* proof of row ownership; it only narrows the set of
+    tentative candidates.  A concrete group must be present in the row.
+    """
+    group = group_of(designation)
+    if not group:
+        return True
+    return any(group_of(entry) == group for entry in entries)
+
+
+def _row_match_evidence(component, row):
+    """Classify how strongly a PE3 row can be tied to a missing designation.
+
+    ``exact``            - the designation (or its contact base) is in the row;
+    ``under_expanded``   - the row declares more items than it expands and the
+                           group is compatible, so the row is under-specified;
+    ``family_group``     - same family and group, but no quantity/range proof;
+    ``family_only``      - same letter family, different/unknown group;
+    ``none``             - different family.
+
+    Only ``under_expanded`` may support a warning.  A shared letter prefix is
+    never promoted to a confirmed row.
+    """
+    designation = component.designation
     entries = row.get("entries") or set()
+    if not entries:
+        return MATCH_NONE
+    if designation in entries or base_of(designation) in entries:
+        return MATCH_EXACT
+    families = {family_of(entry) for entry in entries if family_of(entry)}
+    if family_of(designation) not in families:
+        return MATCH_NONE
+    # An unreadable/unknown part makes the row unsafe for attribution.
+    if row.get("unknown"):
+        return MATCH_FAMILY_ONLY
+    if not _group_compatible(designation, entries):
+        return MATCH_FAMILY_ONLY
     quantity = row.get("quantity")
-    mismatch = isinstance(quantity, int) and quantity > len(entries)
-    group = group_of(component.designation)
-    group_match = bool(group) and any(group_of(entry) == group for entry in entries)
-    return (
-        0 if mismatch else 1,
-        0 if group_match else 1,
-        -(quantity - len(entries)) if mismatch else 0,
-        row.get("page") or 0,
-        row.get("table_row") or 0,
-    )
+    if isinstance(quantity, int) and quantity > len(entries):
+        return MATCH_UNDER_EXPANDED
+    return MATCH_FAMILY_GROUP
 
 
-def _attribute_row(component, rows_by_family):
+def _candidate_signature(rows):
+    return tuple(sorted(_row_key(row) for row in rows if row is not None))
+
+
+def _attribute_component(component, rows_by_family):
+    """Return ``(row, reason, evidence, candidate_signature)``.
+
+    The function deliberately refuses to choose an arbitrary row when several
+    rows carry the same evidence.  In that case ``row`` is ``None`` and the
+    reason is ``row_ambiguous``; the candidate signature keeps unrelated
+    ambiguities in separate findings.
+    """
     candidates = [row for row in rows_by_family.get(family_of(component.designation), [])
                   if row.get("entries")]
     if not candidates:
-        return None
-    scored = sorted(((_row_score(component, row), row) for row in candidates), key=lambda item: item[0])
-    best = scored[0][0]
-    winners = [row for score, row in scored if score == best]
-    return winners[0] if len(winners) == 1 else None
+        return None, "no_matching_pe3_row", MATCH_NONE, ()
+
+    classified = [(row, _row_match_evidence(component, row)) for row in candidates]
+    confirmed = [row for row, kind in classified if kind == MATCH_UNDER_EXPANDED]
+    if len(confirmed) == 1:
+        return confirmed[0], "quantity_mismatch", MATCH_UNDER_EXPANDED, _candidate_signature(confirmed)
+    if len(confirmed) > 1:
+        return (None, "row_ambiguous", "multiple_quantity_mismatch",
+                _candidate_signature(confirmed))
+
+    tentative = [row for row, kind in classified if kind == MATCH_FAMILY_GROUP]
+    if len(tentative) == 1:
+        return (tentative[0], "row_matched_without_coverage", MATCH_FAMILY_GROUP,
+                _candidate_signature(tentative))
+    if len(tentative) > 1:
+        return (None, "row_ambiguous", "multiple_family_group",
+                _candidate_signature(tentative))
+
+    # Same letter family but no compatible group: explicitly not a match.
+    evidence = MATCH_FAMILY_ONLY if classified else MATCH_NONE
+    return None, "no_matching_pe3_row", evidence, ()
 
 
 def _suggest_range(missing, row):
@@ -453,11 +528,13 @@ def _details_base(e3_document, pe3_document, status, reason, e3_pages):
     }
 
 
-def _details_for_group(details, row, components, severity, reason):
+def _details_for_group(details, row, components, reason, confidence):
     result = dict(details)
     result["reason"] = reason
     result["missing"] = [_missing_item(component) for component in components[:MAX_LISTED]]
-    result["confidence"] = "high" if severity == "warning" else "medium"
+    # Confidence is evidence quality, not a function of severity.  A tentative
+    # or ambiguous row can never be reported as high confidence.
+    result["confidence"] = confidence
     if len(components) > MAX_LISTED:
         result["limits"] = dict(result["limits"], truncated_list=True)
     while len(result["missing"]) > 1:
@@ -514,6 +591,29 @@ def _not_evaluated(e3_document, pe3_document, e3_pages, reason, *, ambiguous=(),
     return _finding("info", pe3_document, "Сопоставление Э3 ↔ ПЭ3", message, recommendation, details)
 
 
+def _match_confidence(group, row, reason, evidence, partial, truncated):
+    """Evidence-based confidence, deliberately independent of severity.
+
+    * ``high``   - unique row with an explicit quantity surplus;
+    * ``medium`` - unique tentative row (family + group) or no row at all;
+    * ``low``    - ambiguous candidates, family-only coincidence, low E3
+                   evidence or an incomplete analysis.
+    """
+    if truncated or partial:
+        return "low"
+    if not all(component.confidence in ("high", "medium") for component in group):
+        return "low"
+    if reason == "row_ambiguous":
+        return "low"
+    if reason == "no_matching_pe3_row":
+        return "medium"
+    if reason == "quantity_mismatch" and row is not None:
+        return "high" if _row_confidence(row) in ("high", "medium") else "low"
+    if reason == "row_matched_without_coverage" and row is not None:
+        return "medium" if _row_confidence(row) in ("high", "medium") else "low"
+    return "low"
+
+
 def compare_inventories(e3_document, pe3_document, mentions, rows, *,
                         e3_word_count, e3_pages_processed, e3_pages_with_text,
                         e3_truncated=False, pe3_truncated=False):
@@ -564,45 +664,45 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
         return []
 
     groups = defaultdict(list)
-    group_rows = {}
+    group_meta = {}
     for component in missing:
-        row = _attribute_row(component, rows_by_family)
-        row_key = _row_key(row) if row is not None else ("unmatched", family_of(component.designation))
-        key = (row_key, family_of(component.designation))
+        row, reason, evidence, candidates = _attribute_component(component, rows_by_family)
+        family = family_of(component.designation)
+        if row is not None:
+            key = (_row_key(row), family, reason)
+        else:
+            key = (("unmatched", candidates), family, reason, evidence)
         groups[key].append(component)
-        group_rows[key] = row
+        group_meta[key] = (row, reason, evidence, candidates)
 
     findings = []
-    for key in sorted(groups, key=lambda value: (str(value),)):
+    for key in sorted(groups, key=lambda value: str(value)):
         group = sorted(groups[key], key=lambda item: item.designation)
-        row = group_rows[key]
-        family = key[1]
+        row, reason, evidence, candidates = group_meta[key]
+        family = family_of(group[0].designation)
         row_conf = _row_confidence(row) if row is not None else "low"
         quantity_mismatch = bool(
             row is not None and isinstance(row.get("quantity"), int)
             and row["quantity"] > len(row.get("entries") or set())
         )
         all_confirmed = all(component.confidence in ("high", "medium") for component in group)
-        medium_only_without_mismatch = (
-            any(component.confidence == "medium" for component in group) and not quantity_mismatch
-        )
+        confidence = _match_confidence(group, row, reason, evidence, partial, truncated)
+        # A warning needs a unique row with an explicit quantity surplus.  A
+        # shared family, a group match or ``duplicate_eligible`` alone is not
+        # enough to prove that the row owns the missing designation.
         warning = (
-            row is not None
+            reason == "quantity_mismatch"
+            and evidence == MATCH_UNDER_EXPANDED
+            and row is not None
+            and quantity_mismatch
             and not truncated
             and not partial
             and family not in TERMINAL_FAMILIES
             and row_conf in ("high", "medium")
             and all_confirmed
-            and (quantity_mismatch or row_conf == "high")
-            and not medium_only_without_mismatch
+            and confidence in ("high", "medium")
         )
         severity = "warning" if warning else "info"
-        if row is None:
-            reason = "no_matching_pe3_row"
-        elif quantity_mismatch:
-            reason = "quantity_mismatch"
-        else:
-            reason = "ambiguous_row"
 
         base = _details_base(e3_document, pe3_document, "evaluated", reason,
                              sorted({page for component in group for page in component.pages}))
@@ -614,7 +714,7 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
             base["ambiguous"] = [
                 _ambiguous_item(component) for component in relevant_ambiguous[:MAX_AMBIGUOUS]
             ]
-        details = _details_for_group(base, row, group, severity, reason)
+        details = _details_for_group(base, row, group, reason, confidence)
 
         designations = [component.designation for component in group]
         listed = _format_designations(designations, MAX_MESSAGE_LISTED)
@@ -623,6 +723,7 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
             f"Обнаружено обозначений: {len(designations)}.",
             f"Первые обозначения: {listed}.",
             f"Документ Э3: {_clean(e3_document, MAX_DOCUMENT)}; листы PDF: {_format_pages(base['e3_pages'])}.",
+            f"Причина: {REASON_LABELS.get(reason, reason)}.",
         ]
         if row is not None:
             place = f"лист PDF {row.get('page')}"
@@ -636,6 +737,17 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
                 message_lines.append(f"Наименование позиции ПЭ3: «{_clean(row.get('name'), MAX_NAME)}».")
         else:
             message_lines.append(f"Документ ПЭ3: {_clean(pe3_document, MAX_DOCUMENT)}; строка не сопоставлена.")
+        if reason == "row_matched_without_coverage":
+            message_lines.append(
+                "Строка ПЭ3 не доказывает принадлежность: совпали только тип и/или группа; "
+                "требуется ручная проверка."
+            )
+        elif reason == "row_ambiguous":
+            count = len(set(candidates))
+            message_lines.append(
+                f"Найдено несколько подходящих строк ПЭ3 (кандидатов: {count}); "
+                "автоматический выбор строки не выполнен."
+            )
         message_lines.append(f"Тип обозначения: {family}" + (f" ({TYPE_NAMES[family]})" if family in TYPE_NAMES else "") + ".")
         message_lines.append(f"Уровень достоверности: {_confidence_label(details['confidence'])}.")
         message_lines.append("Статус проверки: evaluated.")
@@ -645,13 +757,22 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
         message = "\n".join(message_lines)
 
         short_list = _format_designations(designations, MAX_RECOMMENDATION_LISTED)
-        suggestion = _suggest_range(designations, row)
+        suggestion = _suggest_range(designations, row) if reason == "quantity_mismatch" else ""
         recommendation = (
             f"Проверьте полноту перечня позиционных обозначений. На схеме Э3 присутствуют {short_list}, "
             "но они не обнаружены среди обозначений ПЭ3."
         )
         if suggestion:
             recommendation += f" Возможное исправление: дополнить диапазон {suggestion}."
+        if reason == "row_matched_without_coverage":
+            recommendation += (
+                " Строка ПЭ3 подходит только предположительно по типу/группе; "
+                "проверьте её вручную и не изменяйте документы автоматически."
+            )
+        elif reason == "row_ambiguous":
+            recommendation += (
+                " Найдено несколько похожих строк ПЭ3; сопоставьте обозначения с конкретными строками вручную."
+            )
         recommendation += (
             " Требуется подтверждение инженером; автоматическое изменение документов не выполняется. "
             "Это результат текстового сопоставления, а не доказательство физического отсутствия элемента."
@@ -668,6 +789,8 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
             if row.get("row_band") is not None and row.get("table_row") is not None:
                 pe3_place += f", строка таблицы {row.get('table_row')}"
             place_parts.append(pe3_place)
+        elif reason == "row_ambiguous":
+            place_parts.append(f"ПЭ3: строка не сопоставлена (кандидатов: {len(set(candidates))})")
         else:
             place_parts.append("ПЭ3: строка не сопоставлена")
         findings.append(_finding(severity, pe3_document, "; ".join(place_parts), message, recommendation, details))
@@ -820,12 +943,26 @@ def valid_details(details, known_files, issue):
     severity = issue.get("severity")
     if severity not in ("info", "warning"):
         return False
+    reason = details["reason"]
     if details["status"] == "not_evaluated" and (missing or severity != "info"):
         return False
     if details["status"] == "evaluated" and not missing and not ambiguous:
         return False
     if severity == "warning" and (details["confidence"] == "low"
                                   or details["partial"] or details["truncated"]):
+        return False
+    # Block 2 invariants: only a unique row with an explicit quantity surplus
+    # may carry a warning; ambiguous/family-only matches must stay uncertain.
+    if reason == "ambiguous_row":
+        return False
+    if severity == "warning" and reason != "quantity_mismatch":
+        return False
+    if reason in ("row_ambiguous", "no_matching_pe3_row") and (
+            details["pe3_page"] is not None or details["pe3_table_row"] is not None):
+        return False
+    if reason == "row_ambiguous" and details["confidence"] != "low":
+        return False
+    if reason == "row_matched_without_coverage" and details["confidence"] == "high":
         return False
     try:
         size = len(json.dumps(details, ensure_ascii=False, allow_nan=False,

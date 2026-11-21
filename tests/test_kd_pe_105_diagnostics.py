@@ -95,14 +95,13 @@ def test_ta_quantity_mismatch_is_warning_high_with_quantity_reason():
 # Finding #7: KM row with quantity 1, reason=ambiguous_row, confidence=high
 # ---------------------------------------------------------------------------
 
-def test_km_quantity_one_with_duplicate_evidence_is_ambiguous_row_and_high():
-    """Reproduces finding #7 without claiming that the result is correct.
+def test_km_quantity_one_with_duplicate_evidence_is_not_a_confirmed_match():
+    """Block 2 fixes finding #7: extraction quality is not row ownership.
 
-    ``confidence`` is derived from severity (``_details_for_group``), not from
-    row identity.  ``ambiguous_row`` is the catch-all reason for "a row was
-    found and quantity did not exceed the expanded designations".  The warning
-    gate additionally requires ``_row_confidence(row) == "high"``, which for a
-    one-to-one row can only come from ``duplicate_eligible``.
+    ``duplicate_eligible`` still means the row was extracted reliably, but a
+    one-to-one row with the same letter family and group cannot prove that the
+    missing designation belongs to it.  The finding stays informational and
+    carries the explicit reason ``row_matched_without_coverage``.
     """
     row = pe3_row(["3KM1"], quantity=1, duplicate=True, table_row=7)
     assert _row_confidence(row) == "high"
@@ -110,15 +109,14 @@ def test_km_quantity_one_with_duplicate_evidence_is_ambiguous_row_and_high():
     issue = only(compare([label("3KM2")], [row]))
     details = issue["details"]
 
-    assert issue["severity"] == "warning"
-    assert details["reason"] == "ambiguous_row"
-    assert details["confidence"] == "high"
+    assert issue["severity"] == "info"
+    assert details["reason"] == "row_matched_without_coverage"
+    assert details["confidence"] == "medium"
     assert details["pe3_quantity"] == 1
     assert details["pe3_entries_count"] == 1
     assert details["pe3_table_row"] == 7
     assert [item["designation"] for item in details["missing"]] == ["3KM2"]
 
-    # The schema accepts the disputed combination: it cannot catch the defect.
     assert valid_details(details, {E3, PE3}, issue) is True
 
 
@@ -130,19 +128,24 @@ def test_km_quantity_one_without_duplicate_evidence_is_info_medium():
     details = issue["details"]
 
     assert issue["severity"] == "info"
-    assert details["reason"] == "ambiguous_row"
+    assert details["reason"] == "row_matched_without_coverage"
     assert details["confidence"] == "medium"
     assert details["pe3_quantity"] == 1
 
 
 def test_quantity_below_expanded_entries_is_not_a_quantity_mismatch():
-    """Only ``quantity > len(entries)`` is treated as a mismatch."""
+    """Only ``quantity > len(entries)`` is treated as a mismatch.
+
+    A row that expands to more items than its quantity cannot confirm that a
+    different designation belongs to it; the match stays tentative.
+    """
     row = pe3_row(["3KM1", "3KM2"], quantity=1, duplicate=True, table_row=7)
     issue = only(compare([label("3KM3")], [row]))
     details = issue["details"]
 
-    assert details["reason"] == "ambiguous_row"
-    assert details["confidence"] == "high"
+    assert issue["severity"] == "info"
+    assert details["reason"] == "row_matched_without_coverage"
+    assert details["confidence"] == "medium"
     assert details["pe3_quantity"] == 1
     assert details["pe3_entries_count"] == 2
 
@@ -183,8 +186,8 @@ def test_component_label_confidence_does_not_reach_details_confidence():
 # Row attribution edge cases
 # ---------------------------------------------------------------------------
 
-def test_equal_scored_rows_are_reported_as_no_matching_pe3_row():
-    """Two same-family rows with identical score make ``_attribute_row`` return None."""
+def test_equal_scored_rows_are_preserved_as_ambiguous():
+    """Two same-family rows with equal evidence must not be merged or chosen."""
     rows = [
         pe3_row(["3KM1"], quantity=1, band=None, table_row=None),
         pe3_row(["3KM2"], quantity=1, band=None, table_row=None),
@@ -192,9 +195,11 @@ def test_equal_scored_rows_are_reported_as_no_matching_pe3_row():
     issue = only(compare([label("3KM3")], rows))
     details = issue["details"]
 
-    assert details["reason"] == "no_matching_pe3_row"
-    assert details["confidence"] == "medium"
+    assert issue["severity"] == "info"
+    assert details["reason"] == "row_ambiguous"
+    assert details["confidence"] == "low"
     assert details["pe3_page"] is None
+    assert details["pe3_table_row"] is None
 
 
 def test_table_row_is_hidden_without_a_pdf_row_band():
@@ -218,7 +223,7 @@ def test_terminal_families_are_information_only_even_with_verified_row(designati
     details = issue["details"]
 
     assert issue["severity"] == "info"
-    assert details["reason"] == "ambiguous_row"
+    assert details["reason"] == "row_matched_without_coverage"
     assert details["confidence"] == "medium"
     assert details["type_family"] == family
 
