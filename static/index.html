@@ -20,6 +20,37 @@ $('files').onchange=e=>setFiles(e.target.files);
 const drop=$('drop');drop.ondragover=e=>{e.preventDefault();drop.classList.add('over');};drop.ondragleave=()=>drop.classList.remove('over');drop.ondrop=e=>{e.preventDefault();drop.classList.remove('over');setFiles(e.dataTransfer.files);};
 async function api(url,opts){const r=await fetch(url,opts);const body=await r.json().catch(()=>({detail:'Ошибка сервера'}));if(!r.ok)throw Error(typeof body.detail==='string'?body.detail:'Ошибка '+r.status);return body;}
 const severityLabels={error:'Ошибка',warning:'Предупреждение',info:'Информация'};
+function detailsBlock(issue){
+ const d=issue&&issue.details;
+ if(!d||d.kind!=='e3_pe3_missing_designations')return '';
+ const s=value=>esc(value==null?'':value);
+ const pages=Array.isArray(d.e3_pages)?d.e3_pages.join(', '):'';
+ const missing=Array.isArray(d.missing)?d.missing:[];
+ const shown=missing.slice(0,200).map(item=>{
+  const itemPages=Array.isArray(item.pages)?item.pages.join(', '):'';
+  const kinds=Array.isArray(item.kinds)?item.kinds.join(', '):'';
+  const evidence=Array.isArray(item.evidence)?item.evidence.slice(0,3).map(e=>`лист PDF ${s(e.page)}: ${s(e.context)} (${s(e.kind)})`).join('; '):'';
+  return `<li><strong>${s(item.designation)}</strong>${itemPages?` — листы PDF ${s(itemPages)}`:''}${kinds?`; контекст: ${s(kinds)}`:''}${evidence?`<div class="issue-detail-evidence">${s(evidence)}</div>`:''}</li>`;
+ }).join('');
+ const ambiguous=Array.isArray(d.ambiguous)?d.ambiguous:[];
+ const ambiguousText=ambiguous.length?`<p><strong>Неоднозначные:</strong> ${s(ambiguous.slice(0,50).map(x=>x.designation).join(', '))}${ambiguous.length>50?` и ещё ${ambiguous.length-50}`:''}</p>`:'';
+ const pe3=d.pe3_page?`лист PDF ${s(d.pe3_page)}${d.pe3_table_row?`, строка таблицы ${s(d.pe3_table_row)}`:''}`:'не сопоставлена';
+ return `<div class="issue-details"><h5>Структурированные сведения</h5>
+  <dl class="issue-detail-meta">
+   <div><dt>Статус проверки</dt><dd>${s(d.status)}</dd></div>
+   <div><dt>Достоверность</dt><dd>${s(d.confidence)}</dd></div>
+   <div><dt>Документ Э3</dt><dd>${s(d.e3_document)}</dd></div>
+   <div><dt>Листы Э3</dt><dd>${s(pages)}</dd></div>
+   <div><dt>ПЭ3</dt><dd>${s(d.pe3_document)}; ${s(pe3)}</dd></div>
+   <div><dt>Количество / раскрыто</dt><dd>${s(d.pe3_quantity)} / ${s(d.pe3_entries_count)}</dd></div>
+   <div><dt>Наименование ПЭ3</dt><dd>${s(d.pe3_name||'не распознано достоверно')}</dd></div>
+  </dl>
+  ${missing.length?`<p><strong>Отсутствуют в ПЭ3 (${missing.length}):</strong></p><ul>${shown}</ul>`:'<p>Подтверждённых отсутствующих обозначений нет.</p>'}
+  ${missing.length>200?'<p>Показаны первые 200; полный список — в Excel.</p>':''}
+  ${ambiguousText}
+  ${d.reason?`<p>Причина: ${s(d.reason)}</p>`:''}
+ </div>`;
+}
 function showIssues(issues,runId=null,states=[]){
  if(!issues.length)return '<p>Замечаний по включённым проверкам не обнаружено. Это не означает полного соответствия КД нормативам.</p>';
  const stateMap=new Map(states.map(state=>[state.issue_index,state]));
@@ -32,7 +63,7 @@ function showIssues(issues,runId=null,states=[]){
   return `<article class="issue-card" role="listitem" aria-label="Замечание ${index+1}">
    <header class="issue-heading"><h4>Замечание ${index+1}</h4><span class="issue-level sev-${level}" data-severity="${esc(issue.severity)}">${esc(label)}</span><span class="issue-code">${esc(issue.code)}</span></header>
    <dl class="issue-meta"><div><dt>Документ</dt><dd class="issue-file">${esc(issue.file)}</dd></div><div><dt>Лист / место</dt><dd>${esc(issue.location)}</dd></div></dl>
-   <div class="issue-body${managed?' issue-body-managed':''}"><div class="issue-content"><h5>Описание</h5><p class="issue-text">${esc(issue.message)}</p><h5>Рекомендация</h5><p class="issue-text">${esc(issue.recommendation)}</p></div>
+   <div class="issue-body${managed?' issue-body-managed':''}"><div class="issue-content"><h5>Описание</h5><p class="issue-text">${esc(issue.message)}</p><h5>Рекомендация</h5><p class="issue-text">${esc(issue.recommendation)}</p>${detailsBlock(issue)}</div>
    ${managed?'<aside class="issue-decision" aria-label="Решение инженера"><h5>Решение инженера</h5>'+findingEditor(state,runId)+'</aside>':''}</div>
   </article>`;
  }).join('')+'</div>';

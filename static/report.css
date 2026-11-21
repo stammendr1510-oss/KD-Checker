@@ -29,6 +29,11 @@ body>header{padding:24px max(24px,calc((100% - 1280px)/2))}
  .issue-body-managed{grid-template-columns:minmax(0,1fr)}
  .issue-meta{grid-template-columns:minmax(0,1fr)}
 }
+.issue-details{margin-top:18px;padding-top:16px;border-top:1px solid #e6eaf1}
+.issue-detail-meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 18px;margin:0 0 12px}
+.issue-detail-meta dt{color:#62738d;font-size:13px}
+.issue-detail-meta dd{margin:2px 0 0;overflow-wrap:anywhere}
+.issue-detail-evidence{font-size:13px;color:#3c506e;white-space:pre-wrap}
 @media(max-width:600px){
  main{padding:0 10px;margin:16px auto}
  .panel{padding:14px}

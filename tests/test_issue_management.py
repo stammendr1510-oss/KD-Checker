@@ -31,6 +31,24 @@ def first_state(run_id):
     return storage.get_run(run_id)['finding_states'][0]
 
 
+def test_finding_identity_includes_details_only_when_present():
+    base = finding()
+    original = finding_identity(base)
+    assert finding_identity(base) == original
+    with_details = finding(details={
+        'schema_version': 1,
+        'kind': 'e3_pe3_missing_designations',
+        'missing': [{'designation': '3TA2'}],
+    })
+    assert finding_identity(with_details) != original
+    reordered = finding(details={
+        'missing': [{'designation': '3TA2'}],
+        'kind': 'e3_pe3_missing_designations',
+        'schema_version': 1,
+    })
+    assert finding_identity(with_details) == finding_identity(reordered)
+
+
 def raw_runs(path):
     with closing(sqlite3.connect(path)) as con:
         return con.execute('SELECT * FROM runs ORDER BY id').fetchall()
