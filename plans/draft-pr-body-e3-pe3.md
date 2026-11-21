@@ -2,10 +2,10 @@
 
 ## База и ветка
 
-- База: `feature/recovery` @ `d76ae72c5118dc0c0d7481b5d96eafd34bfef1da` (фактический HEAD; контрольный `316832131f1a759f3a61814537f04143c9e6ca84` — предок).
-- Ветка: `feature/e3-pe3-missing-designations`.
-- Платформа PR: SourceCraft Draft PR в `feature/recovery`.
-- GitHub PR не создавался: текущий mirror workflow нацелен только на `feature/recovery` и не публикует новую ветку.
+- База: `feature/recovery` @ `316832131f1a759f3a61814537f04143c9e6ca84`.
+- Ветка: `feature/e3-pe3-missing-designations` @ `0ae3d3a18e01118625675773d30be6186857e4a3`.
+- SourceCraft Draft PR: №102, `https://sourcecraft.dev/stammendrs1510/kd-checker/pulls/102`.
+- GitHub PR не создавался: нет `gh`/токена, а mirror workflow публикует фиксированный SHA в `feature/recovery` и PR в `main`.
 
 ## Что изменено
 
@@ -52,17 +52,18 @@
 - `KD-PE-100`–`KD-PE-104` не заменяются.
 - Изоляция parser worker и лимиты не ослаблены.
 
-## Проверки
+## Проверки (фактически выполнены)
 
-| Проверка | Статус |
+| Проверка | Результат |
 |---|---|
-| Целевые тесты | не запускались в этой сессии: терминал недоступен |
-| Полный `python -m pytest -q` | не запускался: терминал недоступен |
+| Целевые тесты | 38 passed |
+| Полный `python -m pytest -q` | 954 passed, 1 skipped (Windows-only Job Object) |
+| KD-PE-100—104 / schema v1 / история / Excel / CSV | 162 passed; CSV 6 колонок, Excel 10 → 12 колонок только при `details` |
 | Windows CI | не запускался: workflow реагирует только на PR в `main` |
-| Linux CI | не запускался: workflow реагирует только на PR в `main` |
-| Реальные PDF | не предоставлены; проверка на них не выполнена |
+| Linux CI | не запускался по той же причине; локальный Linux-прогон выполнен |
+| Реальные PDF | не предоставлены в SourceCraft; независимая приёмка на Windows 11 остаётся за заказчиком |
 
-Это блокеры, а не пройденные проверки.
+Незакрытые пункты: GitHub Actions Windows/Linux и GitHub Draft PR (см. итоговый отчёт).
 
 ## Границы
 
