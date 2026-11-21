@@ -112,16 +112,29 @@ def _validate_result(value, result_version=1, known_files=()):
     if not isinstance(issues,list) or len(issues)>10000:
         raise ProcessingUnavailable()
     for issue in issues:
-        if not isinstance(issue, dict) or set(issue) not in (keys, keys | {'evidence'}):
+        if not isinstance(issue, dict) or any(not isinstance(issue.get(k), str) for k in keys):
+            raise ProcessingUnavailable()
+        code = issue.get('code')
+        if code == 'KD-PE-105':
+            if set(issue) != keys | {'details'}:
+                raise ProcessingUnavailable()
+        elif code == 'KD-PE-100' and result_version == 2:
+            if set(issue) not in (keys, keys | {'evidence'}):
+                raise ProcessingUnavailable()
+        elif set(issue) != keys:
             raise ProcessingUnavailable()
         if (any(not isinstance(issue[k],str) or len(issue[k])>16000 for k in keys)
                 or issue['severity'] not in ('info','warning','error')
-                or re.fullmatch(r'KD-(?:[A-Z]+-)?\d{3}',issue['code']) is None):
+                or re.fullmatch(r'KD-(?:[A-Z]+-)?\d{3}', code) is None):
             raise ProcessingUnavailable()
         if 'evidence' in issue:
             from pdf_match_evidence import valid_evidence
-            if (result_version != 2 or issue['code'] != 'KD-PE-100' or issue['severity'] != 'info'
+            if (result_version != 2 or code != 'KD-PE-100' or issue['severity'] != 'info'
                     or not valid_evidence(issue['evidence'], known_files, issue['file'])):
+                raise ProcessingUnavailable()
+        if 'details' in issue:
+            from e3_pe3_inventory import valid_details
+            if code != 'KD-PE-105' or not valid_details(issue['details'], known_files, issue):
                 raise ProcessingUnavailable()
     return issues
 

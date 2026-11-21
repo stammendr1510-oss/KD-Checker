@@ -18,6 +18,7 @@ RULE_SOURCES = (
     "app.py",
     "engine.py",
     "kd_crosscheck.py",
+    "e3_pe3_inventory.py",
     "document_identity.py",
     "pair_analysis.py",
     "set_completeness.py",

@@ -2,9 +2,14 @@
 from __future__ import annotations
 import re
 from collections import defaultdict
+from itertools import islice
 from pathlib import Path
 import fitz
 from pdf_match_evidence import MAX_LOCATIONS, MAX_MATCHES, location_key, source
+
+MAX_PDF_PAGES = 100
+MAX_SCHEME_DESIGNATIONS_PER_PAGE = 5000
+MAX_SCHEME_MENTIONS = 50000
 
 # Identify components in the electrical scheme primarily from unambiguous wire tags.
 TAG_PREFIX = r'(?:[123])?(?:QF|SF|KM|KK|KV|KT|TA|SB|HLG|HLW|XG|XT|XN|XL|X|PAV)'
@@ -193,11 +198,17 @@ def _duplicate_column_bounds(page, band):
 def get_spec_rows(pdf_bytes, *, include_evidence=False):
     """Read designator column and qty using original PDF word coordinates.
     Only rows with an identifiable numeric qty and designator are accepted.
+    Page traversal is bounded by the same 100-page PDF limit as the reader.
     """
     rows=[]
     with fitz.open(stream=pdf_bytes, filetype='pdf') as pdf:
-        for pi, page in enumerate(pdf):
+        truncated = len(pdf) > MAX_PDF_PAGES
+        for pi, page in enumerate(islice(pdf, MAX_PDF_PAGES)):
             words=page.get_text('words',sort=True)
+            page_size = (float(page.cropbox.width), float(page.cropbox.height))
+            name_words = [t for t in words
+                          if page.rect.width*.188 <= t[0] < page.rect.width*.70
+                          and t[1] < page.rect.height*.83]
             qty = _quantity_words(page, words)
             previous=50
             column=[t for t in words if page.rect.width*.09 <= t[0] < page.rect.width*.188 and t[1]<page.rect.height*.83]
@@ -222,9 +233,24 @@ def get_spec_rows(pdf_bytes, *, include_evidence=False):
                     contained = bool(bounds and all(bounds[0]-.5<=t[0] and t[2]<=bounds[1]+.5 for t in des))
                     complete = bool(bounds and all(t in des for t in words
                         if bounds[0]<=t[0]<bounds[1] and band[0]<(t[1]+t[3])/2<band[1]))
+                    name=''
+                    name_confidence='low'
+                    if band:
+                        name_left = bounds[1] if bounds else page.rect.width*.188
+                        selected = [t for t in name_words
+                                    if name_left <= t[0] < page.rect.width*.70
+                                    and band[0] < (t[1]+t[3])/2 < band[1]]
+                        if selected:
+                            selected.sort(key=lambda t:(t[1],t[0]))
+                            name = re.sub(r'\s+', ' ', ' '.join(t[4] for t in selected)).strip()[:300]
+                            name_confidence='medium'
                     rows.append({'page':pi+1,'source':raw,'quantity':int(w[4]),'entries':entries,'unknown':unknown,
                                  'row_band':band,
                                  'table_row':rules.index(band[0])+1 if band else None,
+                                 'name':name,
+                                 'name_confidence':name_confidence,
+                                 'page_size_pt':page_size,
+                                 'pdf_truncated':truncated,
                                  'duplicate_eligible':bool(band and band[0]>=50 and contained and complete and not unknown
                                                            and _duplicate_range_spelling_is_exact(notation))})
                     if include_evidence and contained and complete and len(des) == 1:
@@ -366,14 +392,29 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes, *, include_evidence=False):
     rows=get_spec_rows(pe_bytes, include_evidence=True) if include_evidence else get_spec_rows(pe_bytes)
     if not rows:
         return [issue('warning','KD-PE-000',pe_filename,'PDF','Не удалось надёжно извлечь строки перечня элементов','Используйте структурированную выгрузку или Excel для точной сверки')]
+    from e3_pe3_inventory import compare_inventories, extract_mentions
     scheme=set(); script_candidates=defaultdict(set); scheme_pages=defaultdict(set)
     script_form_pages=defaultdict(lambda: defaultdict(set))
     spec=set().union(*(r['entries'] for r in rows))
     scheme_sources=defaultdict(list)
+    scheme_mentions=[]
+    e3_pages_processed=0
+    e3_pages_with_text=0
+    e3_word_count=0
+    scheme_truncated=False
     with fitz.open(stream=e3_bytes, filetype='pdf') as pdf:
-        for pi,page in enumerate(pdf):
+        e3_truncated = len(pdf) > MAX_PDF_PAGES
+        for pi,page in enumerate(islice(pdf, MAX_PDF_PAGES)):
+            e3_pages_processed += 1
+            words = page.get_text('words', sort=True)
+            if words:
+                e3_pages_with_text += 1
+            e3_word_count += len(words)
+            page_values = list(islice(scheme_designations(page), MAX_SCHEME_DESIGNATIONS_PER_PAGE))
+            if len(page_values) >= MAX_SCHEME_DESIGNATIONS_PER_PAGE:
+                scheme_truncated = True
             matched_on_page = set()
-            for value in scheme_designations(page):
+            for value in page_values:
                 n=normalized(value)
                 scheme.add(n)
                 script_candidates[n].add(value)
@@ -383,7 +424,7 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes, *, include_evidence=False):
                     matched_on_page.add(n)
             if matched_on_page:
                 boxes = defaultdict(list)
-                for word in page.get_text('words', sort=True):
+                for word in words:
                     designation = normalized(word[4])
                     if designation in matched_on_page and TAG.fullmatch(word[4]):
                         boxes[designation].append(word[:4])
@@ -392,6 +433,14 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes, *, include_evidence=False):
                         e3_filename, pi+1, size=(page.cropbox.width, page.cropbox.height),
                         boxes=boxes[designation],
                     ))
+            if len(scheme_mentions) < MAX_SCHEME_MENTIONS:
+                scheme_mentions.extend(extract_mentions(
+                    words, pi+1,
+                    page_size=(page.cropbox.width, page.cropbox.height),
+                    legacy_values=page_values,
+                ))
+            else:
+                scheme_truncated = True
     # No blanket "missing" reporting: drawings may contain auxiliary devices,
     # split representations and OCR/text-order artifacts.
     for r in rows:
@@ -429,6 +478,14 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes, *, include_evidence=False):
     if missing:
         context = _unconfirmed_pe3_context(rows, missing[:8])
         findings.append(issue('info','KD-PE-101',pe_filename,'Ограничения анализа',f'{len(missing)} обозначений ПЭ3 не подтверждены по извлечённому тексту Э3 (примеры: {", ".join(missing[:8])}).' + context + ' Это не считается ошибкой КД.','Для достоверной проверки использовать структурированный экспорт проекта EPLAN или проверить графику вручную'))
+    findings.extend(compare_inventories(
+        e3_filename, pe_filename, scheme_mentions, rows,
+        e3_word_count=e3_word_count,
+        e3_pages_processed=e3_pages_processed,
+        e3_pages_with_text=e3_pages_with_text,
+        e3_truncated=e3_truncated or scheme_truncated,
+        pe3_truncated=any(row.get('pdf_truncated') for row in rows),
+    ))
     return findings
 
 

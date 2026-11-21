@@ -23,6 +23,11 @@ def run_scope(files):
 def finding_identity(issue):
     values = [' '.join(unicodedata.normalize('NFC', str(issue.get(key, ''))).split())
               for key in ('severity', 'code', 'location', 'message', 'recommendation')]
+    if 'details' in issue:
+        # Additive only for findings that carry structured evidence. Findings
+        # without details keep the exact legacy fingerprint.
+        values.append(json.dumps(issue['details'], ensure_ascii=False, sort_keys=True,
+                                 separators=(',', ':'), allow_nan=False))
     return _digest(['finding-v1', _filename(issue.get('file', '')), *values])
 
 

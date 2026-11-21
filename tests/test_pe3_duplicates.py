@@ -218,12 +218,14 @@ def test_previous_bundle_scenario_keeps_64_matches_and_only_quantity_warning(mon
         ])
     assert response.status_code == 200
     result = response.json()
-    assert result['summary'] == dict(error=0, warning=1, info=1)
-    assert [finding['code'] for finding in result['issues']] == ['KD-PE-102', 'KD-PE-100']
+    assert result['summary'] == dict(error=0, warning=2, info=1)
+    assert [finding['code'] for finding in result['issues']] == ['KD-PE-102', 'KD-PE-100', 'KD-PE-105']
     assert 'количество 9' in result['issues'][0]['message']
     assert 'обозначений (7)' in result['issues'][0]['message']
     assert 'уникальных обозначений — 64' in result['issues'][1]['message']
     assert 'совпадений — 64' in result['issues'][1]['message']
+    missing = result['issues'][2]['details']['missing']
+    assert [item['designation'] for item in missing] == ['3TA2', '3TA3']
 
 
 def test_multiple_scheme_pairs_do_not_duplicate_pe3_warnings(monkeypatch):

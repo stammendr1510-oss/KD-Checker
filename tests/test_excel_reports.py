@@ -2,6 +2,7 @@
 from contextlib import closing
 from copy import deepcopy
 import csv
+import json
 from io import BytesIO, StringIO
 from zipfile import ZipFile
 from xml.etree import ElementTree
@@ -11,7 +12,7 @@ from openpyxl import load_workbook
 import pytest
 
 import app as web
-from excel_reports import build_excel_report
+from excel_reports import HEADERS, build_excel_report
 import storage
 
 
@@ -133,4 +134,59 @@ def test_download_from_persisted_history_and_csv_compatibility(tmp_path, monkeyp
         assert len(rows) == len(saved_run['issues']) + 1
         assert client.get('/api/runs/999/xlsx').status_code == 404
         assert client.get('/api/runs/999/csv').status_code == 404
+
+
+def test_details_add_only_two_columns_to_existing_findings_sheet(saved_run):
+    saved_run['issues'] = [
+        {
+            'severity': 'warning', 'code': 'KD-PE-105', 'file': 'demo.ПЭ3.pdf',
+            'location': 'Э3: листы PDF 1, 2; ПЭ3: лист PDF 2, строка таблицы 5',
+            'message': 'На схеме обнаружены обозначения, отсутствующие в перечне элементов.',
+            'recommendation': 'Проверьте перечень и подтвердите решение инженером.',
+            'details': {
+                'schema_version': 1,
+                'kind': 'e3_pe3_missing_designations',
+                'status': 'evaluated',
+                'confidence': 'high',
+                'e3_document': 'demo.Э3.pdf',
+                'pe3_document': 'demo.ПЭ3.pdf',
+                'e3_pages': [1, 2],
+                'pe3_page': 2,
+                'pe3_table_row': 5,
+                'pe3_quantity': 9,
+                'pe3_entries_count': 7,
+                'pe3_name': 'Трансформатор тока измерительный',
+                'missing': [
+                    {
+                        'designation': '3TA2', 'raw': '3TA2', 'pages': [1, 2],
+                        'kinds': ['label', 'reference'],
+                        'evidence': [{'page': 1, 'kind': 'label', 'context': '3TA2'}],
+                    },
+                    {
+                        'designation': '3TA3', 'raw': '3TA3', 'pages': [1, 2],
+                        'kinds': ['label'],
+                        'evidence': [{'page': 1, 'kind': 'label', 'context': '3TA3'}],
+                    },
+                ],
+                'ambiguous': [],
+                'reason': 'quantity_mismatch',
+            },
+        },
+        {
+            'severity': 'info', 'code': 'TEST-2', 'file': 'demo.pdf',
+            'location': 'Лист 1', 'message': 'Искусственное замечание',
+            'recommendation': 'Проверить тестовые данные',
+        },
+    ]
+    with closing(load_workbook(BytesIO(build_excel_report(saved_run)))) as book:
+        assert book.sheetnames == ['Общие сведения', 'Замечания']
+        sheet = book['Замечания']
+        header = list(sheet.values)[0]
+        assert header[:10] == tuple(HEADERS)
+        assert header[10:] == ('Доказательства KD-PE-105', 'Детали KD-PE-105 (JSON)')
+        assert '3TA2' in sheet['K2'].value and '3TA3' in sheet['K2'].value
+        assert json.loads(sheet['L2'].value)['missing'][0]['designation'] == '3TA2'
+        assert sheet['K2'].data_type == 's' and sheet['L2'].data_type == 's'
+        assert sheet['K3'].value in (None, '') and sheet['L3'].value in (None, '')
+        assert sheet.auto_filter.ref == 'A1:L3'
 

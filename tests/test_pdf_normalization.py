@@ -121,11 +121,17 @@ def test_explicit_seven_of_nine_keep_warning_and_all_64_matches(wrapped):
     assert len(transformer['entries']) == 7
     assert not transformer['unknown']
     findings = run('demo.Э3.pdf', scheme, 'demo.ПЭ3.pdf', pe)
-    assert [(f['code'], f['severity']) for f in findings] == [('KD-PE-102', 'warning'), ('KD-PE-100', 'info')]
+    assert [(f['code'], f['severity']) for f in findings] == [
+        ('KD-PE-102', 'warning'), ('KD-PE-100', 'info'), ('KD-PE-105', 'warning'),
+    ]
     assert findings[0]['location'] == f"Лист PDF 2, строка таблицы {transformer['table_row']}"
     assert 'количество 9' in findings[0]['message'] and 'обозначений (7)' in findings[0]['message']
     assert 'уникальных обозначений — 64' in findings[1]['message']
     assert 'совпадений — 64' in findings[1]['message']
+    details = findings[2]['details']
+    assert [item['designation'] for item in details['missing']] == ['3TA2', '3TA3']
+    assert details['pe3_quantity'] == 9 and details['pe3_entries_count'] == 7
+    assert details['status'] == 'evaluated'
 
 
 def test_recovered_scheme_prefix_matches_without_changing_pe3_quantity():

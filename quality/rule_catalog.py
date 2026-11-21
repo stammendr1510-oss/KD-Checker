@@ -30,6 +30,7 @@ RULES: dict[str, Rule] = {
     "KD-PE-102": Rule("specification", "heuristic", "Extracted PE3 quantity discrepancy"),
     "KD-PE-103": Rule("designations", "heuristic", "Mixed-script lookalike warning"),
     "KD-PE-104": Rule("duplicates", "heuristic", "PE3 repeated designation in verified rows"),
+    "KD-PE-105": Rule("cross_document", "heuristic", "E3 designators absent from expanded PE3 positions"),
     "KD-SET-101": Rule("completeness", "informational", "Missing uploaded E3/PE3 counterpart"),
     "KD-SET-102": Rule("duplicates", "informational", "Repeated uploaded PDF identity"),
     "KD-SET-103": Rule("cross_document", "informational", "Ambiguous PDF version pairing"),
