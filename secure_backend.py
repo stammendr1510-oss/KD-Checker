@@ -18,6 +18,7 @@ from document_identity import pdf_identity_findings, unique_pdf_analysis_sources
 from pair_analysis import pair_analysis_plan
 from kd_crosscheck import designation_type, pair_key, check_spec_duplicates, run as crosscheck
 from excel_reports import build_excel_report
+from kd_pe_105_evidence import enrich_run
 from connection_import import parse_connections
 from project_configuration import ProjectConfiguration
 from parser_process import run_check, Limits, ProcessingUnavailable
@@ -229,4 +230,6 @@ class ScopedBackend:
             for issue in record['issues']:
                 writer.writerow(["'"+str(issue[k]) if str(issue[k]).lstrip().startswith(('=', '+', '-', '@')) else issue[k] for k in keys])
             return Response('\ufeff'+out.getvalue(), media_type='text/csv; charset=utf-8')
-        return record
+        # Display-only evidence views; the stored schema v1 and decisions are
+        # unchanged.
+        return enrich_run(record)

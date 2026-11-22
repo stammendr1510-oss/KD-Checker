@@ -7,6 +7,7 @@ from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from issue_tracking import STATUS_LABELS
+from kd_pe_105_evidence import format_evidence_text
 
 
 LEVELS = {
@@ -35,45 +36,15 @@ def _details_json(details):
     return value if len(value) <= 30000 else value[:29900] + '… (усечено)'
 
 
-def _details_text(details):
+def _details_text(details, issue=None):
+    """Human-readable evidence block derived from schema v1 ``details``.
+
+    Coordinates and internal JSON are never rendered here; the structured JSON
+    keeps its own Excel column.
+    """
     if not isinstance(details, dict):
         return ''
-    pages = ', '.join(str(value) for value in (details.get('e3_pages') or []))
-    lines = [
-        f"Статус: {details.get('status', '')}; достоверность: {details.get('confidence', '')}",
-        f"Э3: {details.get('e3_document', '')}; листы PDF: {pages}",
-        f"ПЭ3: {details.get('pe3_document', '')}; лист PDF: {details.get('pe3_page') or ''}",
-    ]
-    if details.get('pe3_table_row'):
-        lines[-1] += f"; строка таблицы: {details['pe3_table_row']}"
-    lines.append(
-        f"Количество: {details.get('pe3_quantity') or ''}; "
-        f"раскрыто обозначений: {details.get('pe3_entries_count') or ''}"
-    )
-    if details.get('pe3_name'):
-        lines.append(f"Наименование позиции ПЭ3: {details['pe3_name']}")
-    missing = details.get('missing') or []
-    if missing:
-        lines.append(f"Отсутствуют в ПЭ3 ({len(missing)}):")
-        for item in missing[:200]:
-            item_pages = ', '.join(str(value) for value in (item.get('pages') or []))
-            kinds = ', '.join(item.get('kinds') or [])
-            lines.append(f"- {item.get('designation', '')}: листы PDF {item_pages}; контекст: {kinds}")
-            for evidence in (item.get('evidence') or [])[:3]:
-                lines.append(
-                    f"  лист PDF {evidence.get('page')}: {evidence.get('context', '')} "
-                    f"({evidence.get('kind', '')})"
-                )
-        if len(missing) > 200:
-            lines.append(f"Показаны первые 200 из {len(missing)}.")
-    ambiguous = details.get('ambiguous') or []
-    if ambiguous:
-        lines.append("Неоднозначные: " + ', '.join(
-            str(item.get('designation', '')) for item in ambiguous[:50]
-        ))
-    if details.get('reason'):
-        lines.append(f"Причина: {details['reason']}")
-    return '\n'.join(lines)[:30000]
+    return format_evidence_text(issue if isinstance(issue, dict) else {'details': details})
 
 
 def _format_sheet(sheet, widths, header_rows=(1,)):
@@ -128,7 +99,7 @@ def build_excel_report(run):
                    state.get('comment', ''), state.get('updated_at') or '']
         if has_details:
             details = item.get('details')
-            values += [_details_text(details), _details_json(details)] if details else ['', '']
+            values += [_details_text(details, item), _details_json(details)] if details else ['', '']
         for column, value in enumerate(values, 2):
             cell = findings.cell(index+1, column)
             _text(cell, value)
