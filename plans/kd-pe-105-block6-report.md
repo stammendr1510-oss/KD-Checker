@@ -240,10 +240,15 @@ Merge не выполняется. Требуется отдельное реш�
 | `ad51127` | доказательное сопоставление строк ПЭ3 (блок 2) |
 | `3f80583` | отчёт блока 2 и Draft PR №104 |
 | `82ea328` | блоки 3–5: классификация, достоверность, доказательства |
-| `см. HEAD` | отчёт блока 6, инструкция Windows 11, тело Draft PR |
+| `e97be4c` | отчёт блока 6, инструкция Windows 11, тело Draft PR |
 
 ## 13. Draft PR
 
-Draft PR с базой `feature/e3-pe3-missing-designations` создаётся после
-публикации ветки `feature/kd-pe-105-acceptance`. Ссылка добавляется в этот
-раздел отдельным коммитом и в итоговом сообщении.
+- PR **№105**, статус `draft`, без merge.
+- Ветка: `feature/kd-pe-105-acceptance` → база
+  `feature/e3-pe3-missing-designations`.
+- Ссылка: <https://sourcecraft.dev/stammendrs1510/kd-checker/pulls/105>
+
+Прямой GitHub push недоступен без токена, а GitHub Actions реагирует только на
+PR в `main`. Поэтому публикация выполнена проверенным безопасным механизмом
+SourceCraft: Draft PR без публикации и без merge. Merge не выполнялся.
