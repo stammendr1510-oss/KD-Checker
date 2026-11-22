@@ -31,37 +31,55 @@ def pair_key(name):
 def issue(level, code, file, place, message, recommendation):
     return {'severity':level, 'code':code, 'file':file, 'location':place, 'message':message, 'recommendation':recommendation}
 
-def _notation_part(raw):
-    """Join incomplete fragments; never append digits to a complete notation."""
-    fragments = [part.replace('…','...') for part in re.split(r'\s+', raw.strip()) if part]
-    joined = ''
-    for line in fragments:
-        left = normalized(joined)
-        if joined and (TAG.fullmatch(left) or RANGE.fullmatch(left)) and not line.startswith('.'):
-            return None
-        joined += line
-    return normalized(joined)
+def _notation_parts(raw):
+    """Split a PE3 designator cell into ``(fragment, ambiguous)`` pairs.
+
+    Only explicit separators (``;`` and ``,``) start a new fragment.  Inside a
+    fragment, whitespace/newlines may only complete a wrapped notation
+    (``1TA1...`` + ``1TA3`` or ``3TA1`` + ``...3TA3``).  If a complete
+    designation/range is followed by a token that does not continue it, the
+    whole fragment is marked ambiguous so the caller records it in ``unknown``
+    instead of inventing separate designations from a numeric gap
+    (``XT1 2`` must never become ``XT1`` or ``XT12``).
+    """
+    parts = []
+    for chunk in re.split(r'[;,]', raw.replace('…', '...')):
+        stripped = chunk.strip()
+        if not stripped:
+            continue
+        joined = ''
+        ambiguous = False
+        for token in (token for token in re.split(r'\s+', stripped) if token):
+            if not joined:
+                joined = token
+                continue
+            left = normalized(joined)
+            if (TAG.fullmatch(left) or RANGE.fullmatch(left)) and not token.startswith('.'):
+                ambiguous = True
+                break
+            joined += token
+        parts.append((stripped, True) if ambiguous else (joined, False))
+    return parts
 
 
 def expand_notation(raw):
     out, unknown = set(), []
-    for part in raw.split(';'):
-        original = part
-        part = _notation_part(part)
-        if part is None:
-            unknown.append(original.strip())
+    for fragment, ambiguous in _notation_parts(raw):
+        if ambiguous:
+            unknown.append(fragment)
             continue
+        part = normalized(fragment)
         if not part: continue
         if '..' not in part:
             if TAG.fullmatch(part): out.add(part)
-            else: unknown.append(part)
+            else: unknown.append(fragment)
             continue
         m = RANGE.fullmatch(part)
         if not m:
-            unknown.append(part); continue
+            unknown.append(fragment); continue
         left, first, right, last = m.groups()
         if right and right != left or int(last)<int(first) or int(last)-int(first)>100:
-            unknown.append(part); continue
+            unknown.append(fragment); continue
         out.update(left+str(i) for i in range(int(first),int(last)+1))
     return out, unknown
 
@@ -153,8 +171,10 @@ def _cell_words(words, quantities, index, rules, previous):
 def _duplicate_range_spelling_is_exact(notation):
     # The legacy range expander converts numbers to int. For duplicate evidence
     # do not equate a padded source like KM01...KM03 with a separate KM1.
-    for part in notation.split(';'):
-        match = RANGE.fullmatch(_notation_part(part) or '')
+    for fragment, ambiguous in _notation_parts(notation):
+        if ambiguous:
+            continue
+        match = RANGE.fullmatch(normalized(fragment))
         if match:
             _, first, _, last = match.groups()
             if str(int(first)) != first or str(int(last)) != last:

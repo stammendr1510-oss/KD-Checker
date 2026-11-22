@@ -126,3 +126,79 @@ def test_browser_engineer_workflow_roles_and_no_dom_injection(system):
         assert errors==[]
         context.close()
         browser.close()
+
+
+def test_kd_105_evidence_is_visible_in_secure_workbench(system):
+    repo, client = system
+    issue = {
+        'severity': 'warning',
+        'code': 'KD-PE-105',
+        'file': 'demo.ПЭ3.pdf',
+        'location': 'Э3: листы PDF 1, 2; ПЭ3: лист PDF 2, строка таблицы 5',
+        'message': 'На схеме обнаружены обозначения 3TA2, отсутствующие в перечне.',
+        'recommendation': 'Проверьте перечень и подтвердите решение инженером.',
+        'details': {
+            'schema_version': 1,
+            'kind': 'e3_pe3_missing_designations',
+            'status': 'evaluated',
+            'reason': 'quantity_mismatch',
+            'confidence': 'high',
+            'e3_document': 'demo.Э3.pdf',
+            'pe3_document': 'demo.ПЭ3.pdf',
+            'e3_pages': [1, 2],
+            'pe3_page': 2,
+            'pe3_table_row': 5,
+            'pe3_quantity': 9,
+            'pe3_entries_count': 7,
+            'pe3_name': 'Трансформатор тока измерительный',
+            'type_family': 'TA',
+            'type_name': 'трансформатор тока',
+            'missing': [{
+                'designation': '3TA2',
+                'raw': '3TA2',
+                'pages': [1, 2],
+                'kinds': ['label'],
+                'evidence': [{'page': 1, 'kind': 'label', 'context': '3TA2'}],
+            }],
+            'ambiguous': [],
+            'partial': False,
+            'truncated': False,
+            'limits': {'max_pages': 100, 'max_listed': 1000, 'truncated_list': False},
+        },
+    }
+    run_id = repo.save(
+        'engineer', Scope('org', 'a'),
+        ['demo.Э3.pdf', 'demo.ПЭ3.pdf'], [issue], revision='synthetic',
+    )
+    errors = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(executable_path=os.environ.get('KD_TEST_CHROMIUM') or None)
+        context = browser.new_context(viewport={'width': 1280, 'height': 900})
+        def bridge(route):
+            request = route.request
+            assert request.url.startswith(ORIGIN + '/')
+            client.cookies.clear()
+            response = client.request(
+                request.method, request.url,
+                content=request.post_data_buffer, headers=request.all_headers(),
+            )
+            route.fulfill(status=response.status_code, headers=dict(response.headers), body=response.content)
+        context.route('**/*', bridge)
+        page = context.new_page()
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.goto(ORIGIN + '/workbench')
+        expect(page.get_by_role('button', name='Войти', exact=True)).to_be_enabled()
+        page.locator('#credential').fill('engineer')
+        page.get_by_role('button', name='Войти', exact=True).click()
+        expect(page.locator('#workspace')).to_be_visible()
+        page.locator('#runs button').filter(has_text=f'№{run_id}').click()
+        details = page.locator('.finding-details')
+        expect(details).to_contain_text('3TA2')
+        expect(details).to_contain_text('Характер расхождения')
+        expect(details).to_contain_text('Почему такая достоверность')
+        expect(details).to_contain_text('Рекомендации инженеру')
+        expect(details).to_contain_text('Трансформатор тока измерительный')
+        assert page.locator('.finding img').count() == 0
+        assert errors == []
+        context.close()
+        browser.close()

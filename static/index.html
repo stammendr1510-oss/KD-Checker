@@ -20,7 +20,64 @@ $('files').onchange=e=>setFiles(e.target.files);
 const drop=$('drop');drop.ondragover=e=>{e.preventDefault();drop.classList.add('over');};drop.ondragleave=()=>drop.classList.remove('over');drop.ondrop=e=>{e.preventDefault();drop.classList.remove('over');setFiles(e.dataTransfer.files);};
 async function api(url,opts){const r=await fetch(url,opts);const body=await r.json().catch(()=>({detail:'Ошибка сервера'}));if(!r.ok)throw Error(typeof body.detail==='string'?body.detail:'Ошибка '+r.status);return body;}
 const severityLabels={error:'Ошибка',warning:'Предупреждение',info:'Информация'};
+function evidenceList(values){
+ const s=value=>esc(value==null?'':value);
+ return Array.isArray(values)&&values.length
+  ?'<ul class="evidence-list">'+values.map(value=>`<li>${s(value)}</li>`).join('')+'</ul>'
+  :'<p class="muted">Нет данных.</p>';
+}
+function evidenceBlock(v){
+ const s=value=>esc(value==null?'':value);
+ const e3=v.e3||{},pe3=v.pe3||{};
+ const detected=Array.isArray(v.detected)?v.detected:[];
+ const items=Array.isArray(v.items)?v.items:[];
+ const ambiguous=Array.isArray(v.ambiguous)?v.ambiguous:[];
+ const candidates=Array.isArray(v.candidates)?v.candidates:[];
+ let pe3Place=pe3.document||'не указан';
+ if(pe3.page!=null){
+  pe3Place+=`; лист PDF ${s(pe3.page)}`;
+  pe3Place+=pe3.table_row!=null?`; строка таблицы ${s(pe3.table_row)}`:`; строка таблицы не подтверждена`;
+ }else{
+  pe3Place+='; строка не сопоставлена';
+ }
+ const itemHtml=items.map(item=>{
+  const meta=[];
+  if(item.pages_text)meta.push('листы PDF '+s(item.pages_text));
+  if(item.kinds_text)meta.push('контекст: '+s(item.kinds_text));
+  if(Array.isArray(item.contexts)&&item.contexts.length)meta.push('фрагменты: '+s(item.contexts.join(' | ')));
+  return `<li><strong>${s(item.designation)}</strong>${meta.length?' — '+meta.join('; '):''}</li>`;
+ }).join('');
+ const candidateHtml=candidates.length
+  ?evidenceList(candidates)
+  :(v.candidate_count?`<p class="muted">Кандидатов: ${s(v.candidate_count)}; список строк не сохранён в details v1.</p>`:'');
+ return `<div class="issue-details evidence-block">
+  <h5>Структурированные сведения</h5>
+  <p class="evidence-summary">${s(v.summary)}</p>
+  <dl class="issue-detail-meta">
+   <div><dt>Обнаруженные обозначения (${s(v.detected_count)})</dt><dd>${detected.length?s(detected.join(', ')):'нет подтверждённых'}</dd></div>
+   <div><dt>Документ Э3</dt><dd>${s(e3.document)}</dd></div>
+   <div><dt>Листы Э3</dt><dd>${s(e3.pages_text||'не установлены')}</dd></div>
+   <div><dt>Документ ПЭ3</dt><dd>${s(pe3.document)}</dd></div>
+   <div><dt>Лист и строка ПЭ3</dt><dd>${s(pe3Place)}</dd></div>
+   <div><dt>Количество / раскрыто</dt><dd>${s(pe3.quantity??'—')} / ${s(pe3.entries_count??'—')}</dd></div>
+   <div><dt>Наименование ПЭ3</dt><dd>${s(pe3.name||'не распознано достоверно')}</dd></div>
+   <div><dt>Тип обозначения</dt><dd>${s(v.type_family||'не определён')}${v.type_name?` (${s(v.type_name)})`:''}</dd></div>
+   <div><dt>Классификация результата</dt><dd>${s(v.classification&&v.classification.label||'не определена')}</dd></div>
+   <div><dt>Характер расхождения</dt><dd>${s(v.reason_label)}</dd></div>
+   <div><dt>Достоверность</dt><dd>${s(v.confidence_label)} (${s(v.confidence)})</dd></div>
+  </dl>
+  ${v.reason_explanation?`<p class="evidence-text">${s(v.reason_explanation)}</p>`:''}
+  <h5>Почему такая достоверность</h5>${evidenceList(v.confidence_basis)}
+  ${Array.isArray(v.what_is_missing)&&v.what_is_missing.length?`<h5>Чего не хватило для достоверного вывода</h5>${evidenceList(v.what_is_missing)}`:''}
+  ${candidates.length?`<h5>Кандидаты ПЭ3 (${s(v.candidate_count)})</h5>${candidateHtml}`:(v.candidate_count?`<h5>Кандидаты ПЭ3</h5>${candidateHtml}`:'')}
+  <h5>Рекомендации инженеру</h5>${evidenceList(v.recommendations)}
+  <h5>Доказательства по обозначениям</h5>${items.length?`<ul class="evidence-list">${itemHtml}</ul>`:'<p class="muted">Подтверждённых отсутствующих обозначений нет.</p>'}
+  ${ambiguous.length?`<h5>Неоднозначные обозначения</h5><ul class="evidence-list">${ambiguous.map(item=>`<li><strong>${s(item.designation)}</strong> — ${s(item.reason_label)}</li>`).join('')}</ul>`:''}
+  ${Array.isArray(v.notes)&&v.notes.length?`<h5>Примечания</h5>${evidenceList(v.notes)}`:''}
+ </div>`;
+}
 function detailsBlock(issue){
+ if(issue&&issue.evidence_view)return evidenceBlock(issue.evidence_view);
  const d=issue&&issue.details;
  if(!d||d.kind!=='e3_pe3_missing_designations')return '';
  const s=value=>esc(value==null?'':value);
@@ -119,7 +176,7 @@ document.addEventListener('input',event=>{
  if(count)count.textContent='Показано: '+shown+' из '+panel.querySelectorAll('[data-checklist-entry]').length;
 });
 
-$('run').onclick=async()=>{if(!chosen.length){$('status').textContent='Сначала выберите файлы';return;}const fd=new FormData();chosen.forEach(f=>fd.append('files',f));$('run').disabled=true;$('status').textContent='Проверка выполняется...';try{let r=await api('/api/check',{method:'POST',body:fd});$('results').classList.remove('hidden');$('stats').innerHTML=[['Файлов',r.files.length],['Ошибки',r.summary.error],['Предупреждения',r.summary.warning],['Информация',r.summary.info]].map(([k,v])=>`<div class="stat"><strong>${v}</strong>${k}</div>`).join('');const saved=await api('/api/runs/'+r.id);$('issues').innerHTML=showIssues(r.issues,r.id,saved.finding_states||[]);$('checklistResult').innerHTML=checklistHtml(saved.checklist||r.checklist);$('csv').href=`/api/runs/${r.id}/csv`;$('xlsx').href=`/api/runs/${r.id}/xlsx`;$('status').textContent='Проверка №'+r.id+' завершена';}catch(e){$('status').textContent=e.message;}finally{$('run').disabled=false;}};
+$('run').onclick=async()=>{if(!chosen.length){$('status').textContent='Сначала выберите файлы';return;}const fd=new FormData();chosen.forEach(f=>fd.append('files',f));$('run').disabled=true;$('status').textContent='Проверка выполняется...';try{let r=await api('/api/check',{method:'POST',body:fd});$('results').classList.remove('hidden');$('stats').innerHTML=[['Файлов',r.files.length],['Ошибки',r.summary.error],['Предупреждения',r.summary.warning],['Информация',r.summary.info]].map(([k,v])=>`<div class="stat"><strong>${v}</strong>${k}</div>`).join('');const saved=await api('/api/runs/'+r.id);$('issues').innerHTML=showIssues(saved.issues,r.id,saved.finding_states||[]);$('checklistResult').innerHTML=checklistHtml(saved.checklist||r.checklist);$('csv').href=`/api/runs/${r.id}/csv`;$('xlsx').href=`/api/runs/${r.id}/xlsx`;$('status').textContent='Проверка №'+r.id+' завершена';}catch(e){$('status').textContent=e.message;}finally{$('run').disabled=false;}};
 async function loadHistory(){try{const rows=await api('/api/runs');$('historyList').innerHTML=rows.length?'<div class="tablewrap"><table><tr><th>№</th><th>Дата (UTC)</th><th>Файлов</th><th>Замечаний</th><th>EPLAN Checklist</th><th>Отчёт</th></tr>'+rows.map(r=>`<tr><td><button onclick="openRun(${r.id})">${r.id}</button></td><td>${esc(r.created_at)}</td><td>${r.file_count}</td><td>${r.issue_count}</td><td>${r.checklist_status==='verified'?'Актуальный список получен':r.checklist_status==='unavailable'?'Источник недоступен':'Не настроен'}</td><td><a href="/api/runs/${r.id}/xlsx">Excel</a> · <a href="/api/runs/${r.id}/csv">CSV</a></td></tr>`).join('')+'</table></div>':'Проверок пока нет';}catch(e){$('historyList').textContent=e.message;}}
 async function openRun(id){try{let r=await api('/api/runs/'+id);$('historyList').innerHTML='<button onclick="loadHistory()">← Назад</button><h3>Проверка №'+id+'</h3><div class="controls"><a href="/api/runs/'+id+'/xlsx">Скачать отчёт Excel</a><a href="/api/runs/'+id+'/csv">Скачать отчёт CSV</a></div><p class="filename-list">Файлы: '+r.files.map(esc).join(', ')+'</p>'+(id>1?'<div class="comparison-control"><label for="previousRunId">Сравнить с предыдущей проверкой №</label><input id="previousRunId" type="number" min="1" max="'+(id-1)+'" value="'+(id-1)+'" aria-label="Номер предыдущей проверки"><button type="button" onclick="showComparison('+id+')">Сравнить до / после</button><p class="muted">Сравниваются проверки с одинаковым составом имён файлов. Статусы инженера не переносятся.</p></div><div id="comparisonResults" role="status" aria-live="polite"></div>':'')+showIssues(r.issues,r.id,r.finding_states||[])+checklistHtml(r.checklist)+(id>1?'<div class="comparison-control"><label for="previousChecklistRunId">Сравнить требования EPLAN Checklist с проверкой №</label><input id="previousChecklistRunId" type="number" min="1" max="'+(id-1)+'" value="'+(id-1)+'" aria-label="Номер предыдущей проверки для сравнения чек-листа"><button type="button" onclick="showChecklistComparison('+id+')">Сравнить версии чек-листа</button><div id="checklistComparisonResults" role="status" aria-live="polite"></div></div>':'');}catch(e){$('historyList').textContent=e.message;}}
 function checklistDiffList(items,kind){

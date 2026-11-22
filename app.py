@@ -17,6 +17,7 @@ from storage import (get_run, list_runs, save_run, update_finding, finding_histo
                      FindingConflict, FindingNotFound)
 from issue_tracking import MAX_COMMENT, validate_decision
 from excel_reports import build_excel_report
+from kd_pe_105_evidence import enrich_run
 from set_completeness import unpaired_document_findings
 from full_set_completeness import full_set_findings
 from document_identity import pdf_identity_findings, unique_pdf_analysis_sources
@@ -151,7 +152,9 @@ def run(run_id: int):
     r = get_run(run_id)
     if r is None:
         raise HTTPException(404, "Проверка не найдена")
-    return r
+    # Evidence views are derived for display only. The stored issues keep the
+    # validated schema v1 unchanged, so history and decisions remain intact.
+    return enrich_run(r)
 
 @app.get("/api/runs/{run_id}/compare/{previous_run_id}")
 def compare_run_results(run_id: int, previous_run_id: int):

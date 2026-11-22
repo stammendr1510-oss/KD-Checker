@@ -88,6 +88,9 @@ def test_kd_105_details_are_visible_in_history(live_url):
             expect(page.locator('.issue-details')).to_contain_text('3TA3')
             expect(page.locator('.issue-details')).to_contain_text('лист PDF 2')
             expect(page.locator('.issue-details')).to_contain_text('Трансформатор тока измерительный')
+            expect(page.locator('.issue-details')).to_contain_text('Характер расхождения')
+            expect(page.locator('.issue-details')).to_contain_text('Почему такая достоверность')
+            expect(page.locator('.issue-details')).to_contain_text('Рекомендации инженеру')
             assert page.locator('.issue-details img').count() == 0
             assert errors == []
         finally:

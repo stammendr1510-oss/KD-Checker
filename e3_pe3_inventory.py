@@ -12,6 +12,24 @@ import math
 import re
 
 from kd_crosscheck import MAX_PDF_PAGES, TAG, designation_type, normalized, pair_key
+from identifier_classification import (
+    AMBIGUOUS,
+    CONNECTION_REFERENCE,
+    CROSS_REFERENCE,
+    DEVICE_CANDIDATE,
+    TERMINAL_OR_PIN,
+    classification_report,
+    classify_component,
+)
+from kd_pe_105_confidence import (
+    MATCH_EXACT,
+    MATCH_FAMILY_GROUP,
+    MATCH_FAMILY_ONLY,
+    MATCH_NONE,
+    MATCH_UNDER_EXPANDED,
+    assess_finding,
+    validate_combination,
+)
 
 
 CODE = "KD-PE-105"
@@ -62,7 +80,11 @@ CONFIDENCE_LEVELS = frozenset({"high", "medium", "low"})
 STATUSES = frozenset({"evaluated", "not_evaluated"})
 REASONS = frozenset({
     "quantity_mismatch", "reference_only", "no_text_layer", "pe3_not_parsed",
-    "truncated", "ambiguous_row", "no_matching_pe3_row",
+    "truncated", "no_matching_pe3_row", "row_matched_without_coverage",
+    "row_ambiguous", "needs_context",
+    # Deprecated: emitted by schema v1 before block 2. Kept readable so old
+    # stored details can still be inspected, but never produced again.
+    "ambiguous_row",
 })
 REASON_LABELS = {
     "quantity_mismatch": "количество в ПЭ3 не совпадает с раскрытыми обозначениями",
@@ -70,9 +92,22 @@ REASON_LABELS = {
     "no_text_layer": "в PDF Э3 не обнаружен текстовый слой",
     "pe3_not_parsed": "позиционные обозначения ПЭ3 не извлечены достоверно",
     "truncated": "обработка PDF ограничена",
-    "ambiguous_row": "невозможно однозначно сопоставить строку ПЭ3",
     "no_matching_pe3_row": "не найдена строка ПЭ3 с подходящим типом",
+    "row_matched_without_coverage": (
+        "строка ПЭ3 похожа по типу и группе, но не доказывает принадлежность обозначения"
+    ),
+    "row_ambiguous": (
+        "несколько строк ПЭ3 одинаково подходят; выбор строки не выполняется"
+    ),
+    "needs_context": (
+        "обозначение неоднозначно; для отнесения к изделию требуется дополнительный контекст"
+    ),
+    "ambiguous_row": "устаревшая причина: неоднозначная строка ПЭ3",
 }
+
+# Evidence classes for row attribution live in the central confidence model.
+# Only ``under_expanded`` is proof that a row is under-specified; family/group
+# coincidence stays tentative.  They are re-exported here for compatibility.
 
 NOTE_RE = re.compile(
     r"(?:\bсм\b|\bприм(?:еч)?|\bтабл|\bсоответств|\bпоз\.?|\bобознач|"
@@ -96,6 +131,9 @@ class Mention:
     confidence: str
     bbox: tuple[float, float, float, float] | None = None
     page_size: tuple[float, float] | None = None
+    # Full source line (when available) lets block 3 see a pin suffix even if
+    # the PDF split ``1KM1`` and ``:A1`` into separate words.
+    line_text: str = ""
 
 
 @dataclass
@@ -106,6 +144,15 @@ class SchemeComponent:
     kinds: set[str] = field(default_factory=set)
     mentions: list[Mention] = field(default_factory=list)
     confidence: str = "low"
+    # Block 3 contextual classification.  Only ``eligible_for_presence_check``
+    # components may be reported as standalone products missing from PE3.
+    category: str = ""
+    classification_reason: str = ""
+    classification_confidence: str = "low"
+    parent_device: str | None = None
+    eligible_for_presence_check: bool = False
+    presence_evidence: bool = False
+    requires_context: bool = False
 
 
 def _clean(value, limit):
@@ -231,6 +278,7 @@ def extract_mentions(words, page, *, page_size=None, legacy_values=()):
                     confidence=_kind_confidence(kind),
                     bbox=box,
                     page_size=size if box else None,
+                    line_text=_clean(line_text, MAX_CONTEXT),
                 ))
                 if len(found) >= MAX_PAGE_MENTIONS:
                     break
@@ -285,8 +333,26 @@ def build_components(mentions):
             component.confidence = "medium"
         else:
             component.confidence = "low"
+        classification = classify_component(component)
+        component.category = classification.category
+        component.classification_reason = classification.reason
+        component.classification_confidence = classification.confidence
+        component.parent_device = classification.parent_device
+        component.eligible_for_presence_check = classification.eligible_for_presence_check
+        component.presence_evidence = classification.presence_evidence
+        component.requires_context = classification.requires_context
         components[designation] = component
     return components, truncated
+
+
+def classification_summary(mentions):
+    """Report which E3 identifiers may be checked for presence in PE3.
+
+    See :func:`identifier_classification.classification_report` for the shape
+    of the result.  Ambiguous identifiers are preserved here instead of being
+    silently dropped.
+    """
+    return classification_report(mentions)
 
 
 def _row_families(row):
@@ -314,30 +380,87 @@ def _row_key(row):
             tuple(sorted(row.get("entries") or set())))
 
 
-def _row_score(component, row):
+def _group_compatible(designation, entries):
+    """A designation without a leading group is compatible with any row.
+
+    Group identity is *not* proof of row ownership; it only narrows the set of
+    tentative candidates.  A concrete group must be present in the row.
+    """
+    group = group_of(designation)
+    if not group:
+        return True
+    return any(group_of(entry) == group for entry in entries)
+
+
+def _row_match_evidence(component, row):
+    """Classify how strongly a PE3 row can be tied to a missing designation.
+
+    ``exact``            - the designation (or its contact base) is in the row;
+    ``under_expanded``   - the row declares more items than it expands and the
+                           group is compatible, so the row is under-specified;
+    ``family_group``     - same family and group, but no quantity/range proof;
+    ``family_only``      - same letter family, different/unknown group;
+    ``none``             - different family.
+
+    Only ``under_expanded`` may support a warning.  A shared letter prefix is
+    never promoted to a confirmed row.
+    """
+    designation = component.designation
     entries = row.get("entries") or set()
+    if not entries:
+        return MATCH_NONE
+    if designation in entries or base_of(designation) in entries:
+        return MATCH_EXACT
+    families = {family_of(entry) for entry in entries if family_of(entry)}
+    if family_of(designation) not in families:
+        return MATCH_NONE
+    # An unreadable/unknown part makes the row unsafe for attribution.
+    if row.get("unknown"):
+        return MATCH_FAMILY_ONLY
+    if not _group_compatible(designation, entries):
+        return MATCH_FAMILY_ONLY
     quantity = row.get("quantity")
-    mismatch = isinstance(quantity, int) and quantity > len(entries)
-    group = group_of(component.designation)
-    group_match = bool(group) and any(group_of(entry) == group for entry in entries)
-    return (
-        0 if mismatch else 1,
-        0 if group_match else 1,
-        -(quantity - len(entries)) if mismatch else 0,
-        row.get("page") or 0,
-        row.get("table_row") or 0,
-    )
+    if isinstance(quantity, int) and quantity > len(entries):
+        return MATCH_UNDER_EXPANDED
+    return MATCH_FAMILY_GROUP
 
 
-def _attribute_row(component, rows_by_family):
+def _candidate_signature(rows):
+    return tuple(sorted(_row_key(row) for row in rows if row is not None))
+
+
+def _attribute_component(component, rows_by_family):
+    """Return ``(row, reason, evidence, candidate_signature)``.
+
+    The function deliberately refuses to choose an arbitrary row when several
+    rows carry the same evidence.  In that case ``row`` is ``None`` and the
+    reason is ``row_ambiguous``; the candidate signature keeps unrelated
+    ambiguities in separate findings.
+    """
     candidates = [row for row in rows_by_family.get(family_of(component.designation), [])
                   if row.get("entries")]
     if not candidates:
-        return None
-    scored = sorted(((_row_score(component, row), row) for row in candidates), key=lambda item: item[0])
-    best = scored[0][0]
-    winners = [row for score, row in scored if score == best]
-    return winners[0] if len(winners) == 1 else None
+        return None, "no_matching_pe3_row", MATCH_NONE, ()
+
+    classified = [(row, _row_match_evidence(component, row)) for row in candidates]
+    confirmed = [row for row, kind in classified if kind == MATCH_UNDER_EXPANDED]
+    if len(confirmed) == 1:
+        return confirmed[0], "quantity_mismatch", MATCH_UNDER_EXPANDED, _candidate_signature(confirmed)
+    if len(confirmed) > 1:
+        return (None, "row_ambiguous", "multiple_quantity_mismatch",
+                _candidate_signature(confirmed))
+
+    tentative = [row for row, kind in classified if kind == MATCH_FAMILY_GROUP]
+    if len(tentative) == 1:
+        return (tentative[0], "row_matched_without_coverage", MATCH_FAMILY_GROUP,
+                _candidate_signature(tentative))
+    if len(tentative) > 1:
+        return (None, "row_ambiguous", "multiple_family_group",
+                _candidate_signature(tentative))
+
+    # Same letter family but no compatible group: explicitly not a match.
+    evidence = MATCH_FAMILY_ONLY if classified else MATCH_NONE
+    return None, "no_matching_pe3_row", evidence, ()
 
 
 def _suggest_range(missing, row):
@@ -378,6 +501,43 @@ def _format_designations(designations, limit):
     return shown
 
 
+def _candidate_sort_key(key):
+    page = key[0] if isinstance(key, (tuple, list)) and key else 0
+    table_row = key[1] if isinstance(key, (tuple, list)) and len(key) > 1 else None
+    return (
+        page if type(page) is int else 0,
+        table_row is None,
+        table_row if type(table_row) is int else 0,
+    )
+
+
+def _format_candidate_rows(candidates, limit=10):
+    """Human-readable PE3 candidate rows without unconfirmed coordinates.
+
+    Only the source page and a grid-confirmed table row are shown.  A missing
+    row number is stated explicitly instead of guessed from text proximity.
+    """
+    labels = []
+    for key in sorted(set(candidates), key=_candidate_sort_key):
+        if not isinstance(key, (tuple, list)) or not key:
+            continue
+        page = key[0]
+        table_row = key[1] if len(key) > 1 else None
+        if type(page) is not int or page < 1:
+            continue
+        label = f"лист PDF {page}"
+        if type(table_row) is int and table_row > 0:
+            label += f", строка таблицы {table_row}"
+        else:
+            label += " (строка не подтверждена)"
+        labels.append(label)
+    shown = labels[:limit]
+    text = "; ".join(shown)
+    if len(labels) > len(shown):
+        text += f"; ещё {len(labels) - len(shown)}"
+    return text
+
+
 def _confidence_label(value):
     return {"high": "высокий", "medium": "средний", "low": "низкий"}.get(value, "низкий")
 
@@ -410,7 +570,11 @@ def _missing_item(component):
     }
 
 
-def _ambiguous_item(component, reason="reference_only"):
+def _ambiguous_item(component, reason=None):
+    if reason is None:
+        reason = ("needs_context"
+                  if getattr(component, "category", "") == AMBIGUOUS
+                  else "reference_only")
     return {
         "designation": component.designation,
         "raw": sorted(component.raw_forms)[0] if component.raw_forms else component.designation,
@@ -453,11 +617,13 @@ def _details_base(e3_document, pe3_document, status, reason, e3_pages):
     }
 
 
-def _details_for_group(details, row, components, severity, reason):
+def _details_for_group(details, row, components, reason, confidence):
     result = dict(details)
     result["reason"] = reason
     result["missing"] = [_missing_item(component) for component in components[:MAX_LISTED]]
-    result["confidence"] = "high" if severity == "warning" else "medium"
+    # Confidence is evidence quality, not a function of severity.  A tentative
+    # or ambiguous row can never be reported as high confidence.
+    result["confidence"] = confidence
     if len(components) > MAX_LISTED:
         result["limits"] = dict(result["limits"], truncated_list=True)
     while len(result["missing"]) > 1:
@@ -514,6 +680,19 @@ def _not_evaluated(e3_document, pe3_document, e3_pages, reason, *, ambiguous=(),
     return _finding("info", pe3_document, "Сопоставление Э3 ↔ ПЭ3", message, recommendation, details)
 
 
+def _match_confidence(group, row, reason, evidence, partial, truncated):
+    """Compatibility wrapper around the central evidence model.
+
+    Confidence is independent of severity.  The full decision, including the
+    limiting evidence factor, is produced by
+    :func:`kd_pe_105_confidence.assess_finding`.
+    """
+    return assess_finding(
+        group=group, row=row, reason=reason, evidence=evidence,
+        partial=partial, truncated=truncated,
+    ).confidence
+
+
 def compare_inventories(e3_document, pe3_document, mentions, rows, *,
                         e3_word_count, e3_pages_processed, e3_pages_with_text,
                         e3_truncated=False, pe3_truncated=False):
@@ -542,11 +721,16 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
                or (0 < e3_pages_with_text < e3_pages_processed))
     truncated = e3_truncated or pe3_truncated or components_truncated
 
-    missing, ambiguous, matched = [], [], []
+    missing, ambiguous, reference_only, matched = [], [], [], []
     for designation in sorted(components):
         component = components[designation]
         if designation in pe3_entries or base_of(designation) in pe3_entries:
             matched.append(component)
+        elif component.category in (TERMINAL_OR_PIN, CONNECTION_REFERENCE, CROSS_REFERENCE):
+            # A pin, connection address or cross-reference is never a
+            # standalone product on its own.  It may be presence evidence, but
+            # it must not create a "missing product" finding.
+            reference_only.append(component)
         elif component.confidence == "low":
             ambiguous.append(component)
         else:
@@ -557,52 +741,50 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
         if family_of(component.designation) not in TERMINAL_FAMILIES
         and family_of(component.designation) in rows_by_family
     ]
+    relevant_reference = [
+        component for component in reference_only
+        if family_of(component.designation) not in TERMINAL_FAMILIES
+        and family_of(component.designation) in rows_by_family
+    ]
+    context_ambiguous = relevant_reference + relevant_ambiguous
     if not missing:
-        if relevant_ambiguous:
+        if context_ambiguous:
             return [_not_evaluated(e3_document, pe3_document, e3_pages, "reference_only",
-                                   ambiguous=relevant_ambiguous, partial=partial, truncated=truncated)]
+                                   ambiguous=context_ambiguous, partial=partial, truncated=truncated)]
         return []
 
     groups = defaultdict(list)
-    group_rows = {}
+    group_meta = {}
     for component in missing:
-        row = _attribute_row(component, rows_by_family)
-        row_key = _row_key(row) if row is not None else ("unmatched", family_of(component.designation))
-        key = (row_key, family_of(component.designation))
+        row, reason, evidence, candidates = _attribute_component(component, rows_by_family)
+        family = family_of(component.designation)
+        if row is not None:
+            key = (_row_key(row), family, reason)
+        else:
+            key = (("unmatched", candidates), family, reason, evidence)
         groups[key].append(component)
-        group_rows[key] = row
+        group_meta[key] = (row, reason, evidence, candidates)
 
     findings = []
-    for key in sorted(groups, key=lambda value: (str(value),)):
+    for key in sorted(groups, key=lambda value: str(value)):
         group = sorted(groups[key], key=lambda item: item.designation)
-        row = group_rows[key]
-        family = key[1]
-        row_conf = _row_confidence(row) if row is not None else "low"
-        quantity_mismatch = bool(
-            row is not None and isinstance(row.get("quantity"), int)
-            and row["quantity"] > len(row.get("entries") or set())
+        row, reason, evidence, candidates = group_meta[key]
+        family = family_of(group[0].designation)
+        # One central model decides confidence and severity.  It uses only
+        # discrete evidence levels and the minimum rule; no numeric weights.
+        decision = assess_finding(
+            group=group,
+            row=row,
+            reason=reason,
+            evidence=evidence,
+            partial=partial,
+            truncated=truncated,
+            candidates=len(set(candidates)),
+            family=family,
+            family_allowed=family not in TERMINAL_FAMILIES,
         )
-        all_confirmed = all(component.confidence in ("high", "medium") for component in group)
-        medium_only_without_mismatch = (
-            any(component.confidence == "medium" for component in group) and not quantity_mismatch
-        )
-        warning = (
-            row is not None
-            and not truncated
-            and not partial
-            and family not in TERMINAL_FAMILIES
-            and row_conf in ("high", "medium")
-            and all_confirmed
-            and (quantity_mismatch or row_conf == "high")
-            and not medium_only_without_mismatch
-        )
-        severity = "warning" if warning else "info"
-        if row is None:
-            reason = "no_matching_pe3_row"
-        elif quantity_mismatch:
-            reason = "quantity_mismatch"
-        else:
-            reason = "ambiguous_row"
+        confidence = decision.confidence
+        severity = decision.severity
 
         base = _details_base(e3_document, pe3_document, "evaluated", reason,
                              sorted({page for component in group for page in component.pages}))
@@ -610,11 +792,11 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
         base["truncated"] = bool(truncated)
         base["type_family"] = family
         base["type_name"] = TYPE_NAMES.get(family, f"тип обозначения {family}" if family else "")
-        if relevant_ambiguous:
+        if context_ambiguous:
             base["ambiguous"] = [
-                _ambiguous_item(component) for component in relevant_ambiguous[:MAX_AMBIGUOUS]
+                _ambiguous_item(component) for component in context_ambiguous[:MAX_AMBIGUOUS]
             ]
-        details = _details_for_group(base, row, group, severity, reason)
+        details = _details_for_group(base, row, group, reason, confidence)
 
         designations = [component.designation for component in group]
         listed = _format_designations(designations, MAX_MESSAGE_LISTED)
@@ -623,6 +805,7 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
             f"Обнаружено обозначений: {len(designations)}.",
             f"Первые обозначения: {listed}.",
             f"Документ Э3: {_clean(e3_document, MAX_DOCUMENT)}; листы PDF: {_format_pages(base['e3_pages'])}.",
+            f"Причина: {REASON_LABELS.get(reason, reason)}.",
         ]
         if row is not None:
             place = f"лист PDF {row.get('page')}"
@@ -636,8 +819,23 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
                 message_lines.append(f"Наименование позиции ПЭ3: «{_clean(row.get('name'), MAX_NAME)}».")
         else:
             message_lines.append(f"Документ ПЭ3: {_clean(pe3_document, MAX_DOCUMENT)}; строка не сопоставлена.")
+        if reason == "row_matched_without_coverage":
+            message_lines.append(
+                "Строка ПЭ3 не доказывает принадлежность: совпали только тип и/или группа; "
+                "требуется ручная проверка."
+            )
+        elif reason == "row_ambiguous":
+            count = len(set(candidates))
+            candidate_text = _format_candidate_rows(candidates)
+            if candidate_text:
+                message_lines.append(f"Кандидаты ПЭ3: {candidate_text}.")
+            message_lines.append(
+                f"Найдено несколько подходящих строк ПЭ3 (кандидатов: {count}); "
+                "автоматический выбор строки не выполнен."
+            )
         message_lines.append(f"Тип обозначения: {family}" + (f" ({TYPE_NAMES[family]})" if family in TYPE_NAMES else "") + ".")
         message_lines.append(f"Уровень достоверности: {_confidence_label(details['confidence'])}.")
+        message_lines.append(f"Основание достоверности: {decision.explanation}.")
         message_lines.append("Статус проверки: evaluated.")
         message_lines.append("Полный перечень и доказательства — в структурированных деталях замечания.")
         if truncated or partial:
@@ -645,13 +843,22 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
         message = "\n".join(message_lines)
 
         short_list = _format_designations(designations, MAX_RECOMMENDATION_LISTED)
-        suggestion = _suggest_range(designations, row)
+        suggestion = _suggest_range(designations, row) if reason == "quantity_mismatch" else ""
         recommendation = (
             f"Проверьте полноту перечня позиционных обозначений. На схеме Э3 присутствуют {short_list}, "
             "но они не обнаружены среди обозначений ПЭ3."
         )
         if suggestion:
             recommendation += f" Возможное исправление: дополнить диапазон {suggestion}."
+        if reason == "row_matched_without_coverage":
+            recommendation += (
+                " Строка ПЭ3 подходит только предположительно по типу/группе; "
+                "проверьте её вручную и не изменяйте документы автоматически."
+            )
+        elif reason == "row_ambiguous":
+            recommendation += (
+                " Найдено несколько похожих строк ПЭ3; сопоставьте обозначения с конкретными строками вручную."
+            )
         recommendation += (
             " Требуется подтверждение инженером; автоматическое изменение документов не выполняется. "
             "Это результат текстового сопоставления, а не доказательство физического отсутствия элемента."
@@ -668,6 +875,16 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
             if row.get("row_band") is not None and row.get("table_row") is not None:
                 pe3_place += f", строка таблицы {row.get('table_row')}"
             place_parts.append(pe3_place)
+        elif reason == "row_ambiguous":
+            candidate_text = _format_candidate_rows(candidates)
+            if candidate_text:
+                place_parts.append(
+                    f"ПЭ3: строка не сопоставлена; кандидаты: {candidate_text}"
+                )
+            else:
+                place_parts.append(
+                    f"ПЭ3: строка не сопоставлена (кандидатов: {len(set(candidates))})"
+                )
         else:
             place_parts.append("ПЭ3: строка не сопоставлена")
         findings.append(_finding(severity, pe3_document, "; ".join(place_parts), message, recommendation, details))
@@ -820,12 +1037,23 @@ def valid_details(details, known_files, issue):
     severity = issue.get("severity")
     if severity not in ("info", "warning"):
         return False
+    reason = details["reason"]
     if details["status"] == "not_evaluated" and (missing or severity != "info"):
         return False
     if details["status"] == "evaluated" and not missing and not ambiguous:
         return False
-    if severity == "warning" and (details["confidence"] == "low"
-                                  or details["partial"] or details["truncated"]):
+    # Central decision table: reject contradictory reason/confidence/severity
+    # instead of silently repairing persisted reports.
+    if not validate_combination(
+        status=details["status"],
+        reason=reason,
+        confidence=details["confidence"],
+        severity=severity,
+        partial=details["partial"],
+        truncated=details["truncated"],
+        pe3_page=details["pe3_page"],
+        pe3_table_row=details["pe3_table_row"],
+    ):
         return False
     try:
         size = len(json.dumps(details, ensure_ascii=False, allow_nan=False,
