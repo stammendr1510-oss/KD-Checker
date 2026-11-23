@@ -124,13 +124,14 @@ def test_note_word_in_the_same_line_demotes_a_device_and_is_a_known_risk():
     assert item.eligible_for_presence_check is False
 
 
-def test_unrecognized_families_are_preserved_as_ambiguous_not_guessed():
-    # KD106-L-02: TAG does not include K, KA, HL.  These common GOST families
-    # are therefore not checked at all.  The token is preserved, never invented.
-    for raw in ("K1", "KA1", "HL1"):
+def test_supported_families_are_classified_as_standalone_devices():
+    # KD106-03: K, KA, KL, HL and KLD are now part of the general TAG rule.
+    # The token is a device candidate, never silently invented or dropped.
+    for raw in ("K1", "KA1", "KL1", "HL1", "KLD1"):
         item = classify_identifier(raw, kind="label", line_text=raw)
-        assert item.category == AMBIGUOUS
-        assert item.requires_context is True
+        assert item.category == DEVICE_CANDIDATE
+        assert item.eligible_for_presence_check is True
+        assert item.requires_context is False
 
 
 def test_warning_without_a_confirmed_row_band_stays_medium_confidence():

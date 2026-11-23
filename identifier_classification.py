@@ -91,6 +91,7 @@ REASON_CROSS_REFERENCE_MARKER = "cross_reference_marker"
 REASON_AMBIGUOUS_TERMINAL_FAMILY = "ambiguous_terminal_family"
 REASON_NON_TAG_TOKEN = "non_tag_token"
 REASON_NOTE_OR_TABLE_CONTEXT = "note_or_table_context"
+REASON_CONTEXT_MARKER_NOT_DECISIVE = "context_marker_not_decisive"
 REASON_UNKNOWN_CONTEXT = "unknown_context"
 
 REASON_LABELS = {
@@ -103,6 +104,9 @@ REASON_LABELS = {
     REASON_AMBIGUOUS_TERMINAL_FAMILY: "одиночное обозначение клеммного/соединительного семейства без контекста",
     REASON_NON_TAG_TOKEN: "токен не является полным позиционным обозначением",
     REASON_NOTE_OR_TABLE_CONTEXT: "токен находится в примечании или табличном фрагменте",
+    REASON_CONTEXT_MARKER_NOT_DECISIVE: (
+        "слово-маркер рядом не отменяет самостоятельное позиционное обозначение"
+    ),
     REASON_UNKNOWN_CONTEXT: "недостаточно контекста для классификации",
 }
 
@@ -208,8 +212,23 @@ def _is_connection(text):
     return bool(text and CONNECTION_RE.search(text))
 
 
-def _is_cross_reference(text):
-    return bool(text and (CROSS_REF_RE.search(text) or DOC_REF_RE.search(text)))
+def _is_cross_reference(text, token=None):
+    """Return True only for a marker near the token, or a document reference.
+
+    A marker elsewhere on a long extracted line (for example a table header)
+    must not demote a standalone designation.  This is the KD106-02 rule at the
+    classification layer.
+    """
+    if not text:
+        return False
+    if DOC_REF_RE.search(text):
+        return True
+    if token:
+        position = text.find(token)
+        if position >= 0:
+            window = text[max(0, position - 24):position + len(token) + 24]
+            return bool(CROSS_REF_RE.search(window))
+    return bool(CROSS_REF_RE.search(text))
 
 
 def classify_identifier(raw, *, kind=None, context="", line_text=None, structure=None):
@@ -262,11 +281,15 @@ def classify_identifier(raw, *, kind=None, context="", line_text=None, structure
         return _make(text, designation, CONNECTION_REFERENCE, designation, None,
                      REASON_CONNECTION_ENDPOINT, "medium", full_context)
 
-    if _is_cross_reference(full_context):
+    if _is_cross_reference(full_context, text):
         return _make(text, designation, CROSS_REFERENCE, None, None,
                      REASON_CROSS_REFERENCE_MARKER, "medium", full_context)
 
     if kind in ("note", "table", "unknown"):
+        # The KD106-02 fix lives in the occurrence-role classifier: a marker
+        # elsewhere on the line no longer produces ``note``.  A genuine note or
+        # table role therefore stays ambiguous here; the designation property
+        # is preserved but cannot by itself become a missing-product finding.
         return _make(text, designation, AMBIGUOUS, None, None,
                      REASON_NOTE_OR_TABLE_CONTEXT, "low", full_context)
 

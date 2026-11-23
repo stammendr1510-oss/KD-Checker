@@ -355,9 +355,11 @@ def scenario_e() -> CaseResult:
         ("QF1", "QF1", DEVICE_CANDIDATE),
         ("KM1", "KM1", DEVICE_CANDIDATE),
         ("SB1", "SB1", DEVICE_CANDIDATE),
-        ("K1", "K1", AMBIGUOUS),
-        ("KA1", "KA1", AMBIGUOUS),
-        ("HL1", "HL1", AMBIGUOUS),
+        ("K1", "K1", DEVICE_CANDIDATE),
+        ("KA1", "KA1", DEVICE_CANDIDATE),
+        ("KL1", "KL1", DEVICE_CANDIDATE),
+        ("HL1", "HL1", DEVICE_CANDIDATE),
+        ("KLD1", "KLD1", DEVICE_CANDIDATE),
         ("X1", "X1:2", TERMINAL_OR_PIN),
     ]
     observed = {}
@@ -370,14 +372,16 @@ def scenario_e() -> CaseResult:
     actual = "; ".join(f"{key}={value}" for key, value in observed.items())
     return _case(
         "E", "Неоднозначные и семейственные обозначения",
-        "Одиночное X-обозначение неоднозначно и не может дать warning; XT/SF/QF/KM/SB — "
-        "самостоятельные изделия; контакт X1:2 — вывод, а не изделие.",
-        "X1=ambiguous, XT1/SF1/QF1/KM1/SB1=device_candidate, X1:2=terminal_or_pin.",
+        "Одиночное X-обозначение неоднозначно и не может дать warning; "
+        "XT/SF/QF/KM/SB/K/KA/KL/HL/KLD — самостоятельные изделия; "
+        "контакт X1:2 — вывод, а не изделие.",
+        "X1=ambiguous; XT1/SF1/QF1/KM1/SB1/K1/KA1/KL1/HL1/KLD1=device_candidate; "
+        "X1:2=terminal_or_pin.",
         "категория каждого пробного обозначения совпадает с ожидаемой",
         [], not mismatches, actual,
         evidence={"observed": observed, "mismatches": mismatches},
-        limitation="K1, KA1, HL1 не распознаются как изделия: их семейств нет в TAG "
-                   "(см. docs/kd-pe-106-known-limitations.md).",
+        limitation="Семейства K/KA/KL/HL/KLD распознаются по общему правилу TAG; "
+                   "контекстная классификация по-прежнему консервативна.",
     )
 
 

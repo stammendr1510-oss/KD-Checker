@@ -14,9 +14,22 @@ def test_only_incomplete_fragments_are_joined(notation, expected):
     assert expand_notation(notation) == (expected, [])
 
 
-@pytest.mark.parametrize('notation', ['XT1\n2', 'XT1 2', 'XT1\nXT2', '1KM1...1KM3\n4'])
+@pytest.mark.parametrize('notation', ['XT1\n2', 'XT1 2', '1KM1...1KM3\n4'])
 def test_complete_notations_are_not_extended_by_guessing(notation):
     assert expand_notation(notation) == (set(), [notation])
+
+
+@pytest.mark.parametrize('notation, expected', [
+    ('XT1\nXT2', {'XT1', 'XT2'}),
+    ('TA2;TA3', {'TA2', 'TA3'}),
+    ('TA2; TA3', {'TA2', 'TA3'}),
+    ('TA2,TA3', {'TA2', 'TA3'}),
+    ('TA2...TA3', {'TA2', 'TA3'}),
+    ('TA2–TA3', {'TA2', 'TA3'}),
+    ('TA2\nTA3', {'TA2', 'TA3'}),
+])
+def test_explicit_group_separators_expand_without_inventing_values(notation, expected):
+    assert expand_notation(notation) == (expected, [])
 
 
 @pytest.mark.parametrize('wrapped', [False, True])
