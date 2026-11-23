@@ -88,6 +88,22 @@ def set_config(cfg: ConfigUpdate):
     CONFIG.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"ok": True}
 
+def _analysis_failed(file_name, stage):
+    """Explicit, non-leaking limitation finding for a failed analysis stage.
+
+    The check must never look successful when a document could not be
+    processed. Exception details are intentionally not included: they may
+    contain fragments of the source documents.
+    """
+    return {
+        "severity": "error",
+        "code": "KD-000",
+        "file": file_name,
+        "location": stage,
+        "message": f"{stage}: документ не обработан полностью, результат проверки неполный",
+        "recommendation": "Проверьте целостность PDF и повторите проверку; при необходимости используйте структурированную выгрузку",
+    }
+
 @app.post("/api/check")
 async def check(files: list[UploadFile] = File(...)):
     if len(files) > MAX_FILES:
@@ -125,11 +141,22 @@ async def check(files: list[UploadFile] = File(...)):
     analysis_sources = unique_pdf_analysis_sources(pdf_sources)
     for pe_name, pe_kind, _, pe_content in analysis_sources:
         if pe_kind == 'ПЭ3':
-            issues.extend(check_spec_duplicates(pe_name, pe_content))
+            try:
+                issues.extend(check_spec_duplicates(pe_name, pe_content))
+            except Exception:
+                # A failed PE3-only analysis must be visible as an explicit
+                # limitation, never as a silent successful check.
+                issues.append(_analysis_failed(pe_name, "Повторная проверка ПЭ3"))
     pairs, pair_findings = pair_analysis_plan(analysis_sources)
     issues.extend(pair_findings)
     for scheme, spec in pairs:
-        issues.extend(crosscheck(scheme[0], scheme[3], spec[0], spec[3]))
+        try:
+            issues.extend(crosscheck(scheme[0], scheme[3], spec[0], spec[3]))
+        except Exception:
+            # Never return HTTP 500 or a silently incomplete result when the
+            # E3/PE3 pair could not be processed. Exception details are not
+            # exposed: they may contain fragments of the source documents.
+            issues.append(_analysis_failed(spec[0], "Сверка Э3 и ПЭ3"))
     for err in errors:
         issues.append({"severity":"error", "code":"KD-000", "file":err["file"], "location":"Загрузка", "message":err["message"], "recommendation":"Предоставьте корректный файл поддерживаемого формата"})
     # Every new check independently retrieves the current checklist when configured.
