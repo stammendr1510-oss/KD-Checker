@@ -112,12 +112,17 @@ def _validate_result(value, result_version=1, known_files=()):
     if not isinstance(issues,list) or len(issues)>10000:
         raise ProcessingUnavailable()
     for issue in issues:
-        if not isinstance(issue, dict) or set(issue) not in (keys, keys | {'evidence'}):
+        if (not isinstance(issue, dict) or not keys <= set(issue)
+                or set(issue) - keys - {'evidence', 'details'}):
             raise ProcessingUnavailable()
         if (any(not isinstance(issue[k],str) or len(issue[k])>16000 for k in keys)
                 or issue['severity'] not in ('info','warning','error')
-                or re.fullmatch(r'KD-(?:[A-Z]+-)?\d{3}',issue['code']) is None):
+                or re.fullmatch(r'KD-(?:[A-Z]+-)?\d{3}(?:-\d+)?',issue['code']) is None):
             raise ProcessingUnavailable()
+        if 'details' in issue:
+            # Structured KD-PE-105 details (schema v1): bounded JSON object.
+            if not isinstance(issue['details'], dict) or len(str(issue['details'])) > 16000:
+                raise ProcessingUnavailable()
         if 'evidence' in issue:
             from pdf_match_evidence import valid_evidence
             if (result_version != 2 or issue['code'] != 'KD-PE-100' or issue['severity'] != 'info'

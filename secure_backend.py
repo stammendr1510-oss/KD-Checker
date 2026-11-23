@@ -57,7 +57,9 @@ def check_documents(files, cfg, *, include_evidence=False):
     issues += notices
     for scheme, spec in plan:
         issues += crosscheck(scheme[0], scheme[3], spec[0], spec[3], include_evidence=include_evidence)
-    issues = apply_engineering_findings(issues, pairs, cfg)
+    # All uploaded PDFs feed the engineering model, not only the
+    # designation-typed E3/PE3 pairs (СП/ВО included).
+    issues = apply_engineering_findings(issues, sources, cfg)
     return issues
 
 
