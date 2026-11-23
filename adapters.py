@@ -7,6 +7,7 @@ from __future__ import annotations
 from full_set_completeness import classify_pdf_name
 from engineering_model import (
     Designation, DocumentRef, EngineeringModel, SchemeMention, SourceRef, SpecRow,
+    run_universal_verifiers, run_verifiers,
 )
 from full_set_completeness import specification_references
 from kd_crosscheck import get_spec_rows, scheme_designations
@@ -98,3 +99,62 @@ def build_model(pdf_sources, names=None) -> EngineeringModel:
             except (RuntimeError, ValueError):
                 pass
     return model
+
+
+# --- KD-PE-109 pipeline seam ---------------------------------------------------
+
+# Legacy codes only suppressed under explicit opt-in (engineering_model_replace_legacy).
+LEGACY_CODES = frozenset({'KD-PE-102', 'KD-SET-203'})
+
+
+import json
+from pathlib import Path as _Path
+
+FLAGS_PATH = _Path(__file__).resolve().parent / 'engineering_flags.json'
+_FLAG_KEYS = ('engineering_model_checks', 'engineering_model_replace_legacy')
+_FLAG_DEFAULTS = {'engineering_model_checks': True, 'engineering_model_replace_legacy': False}
+
+
+def engineering_flags(cfg=None) -> dict:
+    """Resolve EM flags: defaults < engineering_flags.json < explicit cfg keys.
+
+    The persisted configuration schema is a frozen provenance contract and
+    must not gain keys, so these flags live in a separate file.
+    """
+    flags = dict(_FLAG_DEFAULTS)
+    try:
+        flags.update({k: v for k, v in json.loads(FLAGS_PATH.read_text(encoding='utf-8')).items()
+                      if k in _FLAG_KEYS and isinstance(v, bool)})
+    except (OSError, ValueError):
+        pass
+    if cfg:
+        flags.update({k: v for k, v in cfg.items() if k in _FLAG_KEYS and isinstance(v, bool)})
+    return flags
+
+
+def engineering_findings(pdf_sources, cfg=None) -> list:
+    """Build the model from uploaded PDFs and run EM-108/EM-109 verifiers.
+
+    pdf_sources: (name, kind, pair_key, bytes) as produced by /api/check.
+    Never raises: any failure yields no findings.
+    """
+    if not engineering_flags(cfg)['engineering_model_checks']:
+        return []
+    try:
+        model = build_model([(name, content) for name, _, _, content in pdf_sources])
+        return list(run_verifiers(model)) + list(run_universal_verifiers(model))
+    except Exception:
+        return []
+
+
+def apply_engineering_findings(issues, pdf_sources, cfg) -> list:
+    """Append KD-EM-* findings to an existing issue list (pure function).
+
+    Strictly additive by default. Only when the explicit opt-in
+    cfg['engineering_model_replace_legacy'] is true are the legacy codes
+    KD-PE-102 / KD-SET-203 removed from the existing list first.
+    """
+    findings = engineering_findings(pdf_sources, cfg)
+    if engineering_flags(cfg)['engineering_model_replace_legacy']:
+        issues = [i for i in issues if i.get('code') not in LEGACY_CODES]
+    return list(issues) + findings

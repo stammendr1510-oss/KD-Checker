@@ -17,6 +17,7 @@ from set_completeness import unpaired_document_findings
 from document_identity import pdf_identity_findings, unique_pdf_analysis_sources
 from pair_analysis import pair_analysis_plan
 from kd_crosscheck import designation_type, pair_key, check_spec_duplicates, run as crosscheck
+from adapters import apply_engineering_findings
 from excel_reports import build_excel_report
 from connection_import import parse_connections
 from project_configuration import ProjectConfiguration
@@ -56,6 +57,7 @@ def check_documents(files, cfg, *, include_evidence=False):
     issues += notices
     for scheme, spec in plan:
         issues += crosscheck(scheme[0], scheme[3], spec[0], spec[3], include_evidence=include_evidence)
+    issues = apply_engineering_findings(issues, pairs, cfg)
     return issues
 
 
@@ -119,7 +121,7 @@ class ScopedBackend:
         except Conflict:
             raise HTTPException(409, 'Version conflict') from None
         except ProcessingUnavailable:
-            raise HTTPException(503, 'Document processing unavailable') from None
+            raise HTTPException(503, 'Document processing unavailable')
         except ValueError:
             raise HTTPException(422, 'Invalid request') from None
 
