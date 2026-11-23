@@ -218,8 +218,11 @@ def test_previous_bundle_scenario_keeps_64_matches_and_only_quantity_warning(mon
         ])
     assert response.status_code == 200
     result = response.json()
-    assert result['summary'] == dict(error=0, warning=1, info=1)
-    assert [finding['code'] for finding in result['issues']] == ['KD-PE-102', 'KD-PE-100']
+    # The KD-PE-107 stack adds a KD-PE-105 missing-designation warning for the
+    # two designators present in the PE3 row group but absent from the scheme;
+    # the quantity warning and the match summary must be retained.
+    assert result['summary'] == dict(error=0, warning=2, info=1)
+    assert [finding['code'] for finding in result['issues']] == ['KD-PE-102', 'KD-PE-100', 'KD-PE-105']
     assert 'количество 9' in result['issues'][0]['message']
     assert 'обозначений (7)' in result['issues'][0]['message']
     assert 'уникальных обозначений — 64' in result['issues'][1]['message']
