@@ -7,14 +7,23 @@ import fitz
 from pdf_match_evidence import MAX_LOCATIONS, MAX_MATCHES, location_key, source
 
 # Identify components in the electrical scheme primarily from unambiguous wire tags.
-TAG_PREFIX = r'(?:[123])?(?:QF|SF|KM|KK|KV|KT|TA|SB|HLG|HLW|XG|XT|XN|XL|X|PAV)'
-TAG = re.compile(r'(?<![\w.])'+TAG_PREFIX+r'\d+(?:\.\d+)?(?=\s*:|\b)', re.I)
-RANGE = re.compile(r'^([\d]*[A-ZА-Я]+)(\d+)\.{2,3}([\d]*[A-ZА-Я]+)?(\d+)$', re.I)
-CYR_LOOKALIKES = str.maketrans('АВСЕНКМОРТХУавсенкмортху', 'ABCEHKMOPTXYaBcehkmoptxy')
+# Designation normalization/range expansion now live in naming.py; re-exported
+# here for backward compatibility. Reference classes are configurable via
+# naming.configure_reference_classes() (no hardcoded per-class rules).
+from naming import (  # noqa: F401
+    CYR_LOOKALIKES,
+    _notation_part,
+    DEFAULT_CLASS_PREFIX,
+    RANGE,
+    TAG_PREFIX,  # kept as the historical default class prefix
+    configure_reference_classes,
+    current_tag,
+    expand_notation,
+    normalized,
+    reference_tag,
+)
 
-def normalized(s):
-    # Normalization is used only for *matching*, not silently rewriting source files.
-    return s.translate(CYR_LOOKALIKES).upper().strip().replace(' ', '')
+TAG = reference_tag()
 
 def designation_type(name):
     m = re.search(r'\.((?:ПЭ3)|(?:Э3))(?=\s|\.|$)', Path(name).stem, re.I)
@@ -25,40 +34,6 @@ def pair_key(name):
 
 def issue(level, code, file, place, message, recommendation):
     return {'severity':level, 'code':code, 'file':file, 'location':place, 'message':message, 'recommendation':recommendation}
-
-def _notation_part(raw):
-    """Join incomplete fragments; never append digits to a complete notation."""
-    fragments = [part.replace('…','...') for part in re.split(r'\s+', raw.strip()) if part]
-    joined = ''
-    for line in fragments:
-        left = normalized(joined)
-        if joined and (TAG.fullmatch(left) or RANGE.fullmatch(left)) and not line.startswith('.'):
-            return None
-        joined += line
-    return normalized(joined)
-
-
-def expand_notation(raw):
-    out, unknown = set(), []
-    for part in raw.split(';'):
-        original = part
-        part = _notation_part(part)
-        if part is None:
-            unknown.append(original.strip())
-            continue
-        if not part: continue
-        if '..' not in part:
-            if TAG.fullmatch(part): out.add(part)
-            else: unknown.append(part)
-            continue
-        m = RANGE.fullmatch(part)
-        if not m:
-            unknown.append(part); continue
-        left, first, right, last = m.groups()
-        if right and right != left or int(last)<int(first) or int(last)-int(first)>100:
-            unknown.append(part); continue
-        out.update(left+str(i) for i in range(int(first),int(last)+1))
-    return out, unknown
 
 def _row_rules(page, column_left):
     """Horizontal rules crossing the designator column (PDF points)."""
@@ -229,7 +204,7 @@ def get_spec_rows(pdf_bytes, *, include_evidence=False):
                                                            and _duplicate_range_spelling_is_exact(notation))})
                     if include_evidence and contained and complete and len(des) == 1:
                         word = des[0]
-                        if TAG.fullmatch(word[4]) and normalized(word[4]) in entries:
+                        if current_tag().fullmatch(word[4]) and normalized(word[4]) in entries:
                             rows[-1]["literal_box"] = (word[:4], (page.cropbox.width, page.cropbox.height))
     return rows
 
@@ -285,7 +260,7 @@ def scheme_designations(page):
     """Recover only an incomplete prefix + numeric suffix in adjacent PDF lines.
     Standalone complete labels, different blocks, columns and pages stay separate.
     """
-    yield from (m.group(0) for m in TAG.finditer(page.get_text()))
+    yield from (m.group(0) for m in current_tag().finditer(page.get_text()))
     blocks = defaultdict(lambda: defaultdict(list))
     for word in page.get_text('words', sort=True):
         blocks[word[5]][word[6]].append(word)
@@ -303,7 +278,7 @@ def scheme_designations(page):
         if abs(a[0]-b[0]) > 2 or not (0 < b[1]-a[1] <= height*1.6):
             continue
         candidate = a[4]+b[4]
-        if TAG.fullmatch(candidate) and not _separated_by_rule(page, a, b):
+        if current_tag().fullmatch(candidate) and not _separated_by_rule(page, a, b):
             yield candidate
 
 def _unconfirmed_pe3_context(rows, examples):
@@ -385,7 +360,7 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes, *, include_evidence=False):
                 boxes = defaultdict(list)
                 for word in page.get_text('words', sort=True):
                     designation = normalized(word[4])
-                    if designation in matched_on_page and TAG.fullmatch(word[4]):
+                    if designation in matched_on_page and current_tag().fullmatch(word[4]):
                         boxes[designation].append(word[:4])
                 for designation in matched_on_page:
                     scheme_sources[designation].append(source(
@@ -430,5 +405,3 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes, *, include_evidence=False):
         context = _unconfirmed_pe3_context(rows, missing[:8])
         findings.append(issue('info','KD-PE-101',pe_filename,'Ограничения анализа',f'{len(missing)} обозначений ПЭ3 не подтверждены по извлечённому тексту Э3 (примеры: {", ".join(missing[:8])}).' + context + ' Это не считается ошибкой КД.','Для достоверной проверки использовать структурированный экспорт проекта EPLAN или проверить графику вручную'))
     return findings
-
-
