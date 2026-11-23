@@ -5,11 +5,47 @@ no AI/network. Designation-agnostic: reference classes come from naming.py
 configuration, never from per-class special cases.
 """
 from __future__ import annotations
+import re
 from dataclasses import dataclass, field
 
 from connection_checks import Connection
 from engine import issue
 from naming import CYR_LOOKALIKES
+
+
+# --- Universal product-attribute signatures (KD-PE-112) ----------------------
+#
+# Attributes are extracted from already-extracted text; no rule is tied to a
+# concrete device code, file name or sheet number.
+
+VOLTAGE_RE = re.compile(
+    r"(?<![\w.])(\d{1,4})\s*(V\s*DC|V\s*AC|VDC|VAC|V|В)\b",
+    re.I,
+)
+TYPE_CODE_RE = re.compile(
+    r"(?<![\w])([A-ZА-Я]{2,}[A-ZА-Я0-9]*(?:[-/][A-ZА-Я0-9]+)+)(?![\w])",
+    re.I,
+)
+
+
+def extract_attributes(text: str) -> dict:
+    """Return universal electrical/variant signatures found in a product name.
+
+    ``voltages`` — normalized nominal voltage signatures (``24VDC``);
+    ``type_tokens`` — multi-part type/model codes containing a digit.
+    """
+    clean = re.sub(r"\s+", " ", str(text or ""))
+    voltages = set()
+    for number, suffix in VOLTAGE_RE.findall(clean):
+        normalized_suffix = re.sub(r"\s+", "", suffix).upper().replace("В", "V")
+        if normalized_suffix in ("V", "VDC", "VAC"):
+            voltages.add(f"{int(number)}{normalized_suffix}")
+    type_tokens = set()
+    for token in TYPE_CODE_RE.findall(clean):
+        value = token.upper()
+        if any(ch.isdigit() for ch in value):
+            type_tokens.add(value)
+    return {"voltages": frozenset(voltages), "type_tokens": frozenset(type_tokens)}
 
 
 # --- Provenance -------------------------------------------------------------
@@ -79,6 +115,8 @@ class SpecRow:
     designations: list[Designation]      # expanded entries
     unknown: list[str] = field(default_factory=list)
     provenance: SourceRef | None = None
+    name: str = ""
+    attributes: dict = field(default_factory=dict)  # extract_attributes() output
 
     @property
     def confirmed_count(self) -> int:
@@ -106,6 +144,10 @@ class EngineeringModel:
     ambiguous: dict[str, AmbiguousIdentity] = field(default_factory=dict)
     # (kind, key) identities of uploaded documents, supplied by the adapter.
     uploaded_identities: set = field(default_factory=set)
+    # Model-like tokens (e.g. SO1.PLC.01) observed in Э3 text and ПЭ3 names,
+    # mapped to every place they were seen. Universal confusable check input.
+    e3_model_tokens: dict = field(default_factory=dict)   # token -> set[SourceRef]
+    pe3_model_tokens: dict = field(default_factory=dict)  # token -> set[SourceRef]
 
     def add_device(self, des: Designation, ref: SourceRef):
         dev = self.devices.get(des.normalized)
@@ -271,4 +313,86 @@ def _row_ref(model: EngineeringModel, normalized_name: str) -> SourceRef:
 def run_universal_verifiers(model: EngineeringModel) -> list[dict]:
     return (verify_endpoint_conflicts(model)
             + verify_coverage(model)
-            + verify_contact_consistency(model))
+            + verify_contact_consistency(model)
+            + verify_designation_attribute_conflicts(model)
+            + verify_confusable_model_tokens(model))
+
+
+# --- KD-PE-112 universal real-PDF bridge rules --------------------------------
+
+CODE_PARAM_CONFLICT = 'KD-EM-112-1'
+CODE_CONFUSABLE_MODEL = 'KD-EM-112-2'
+MAX_PARAM_EXAMPLES = 8
+
+
+def verify_designation_attribute_conflicts(model: EngineeringModel) -> list[dict]:
+    """EM-112-1: same designator in ПЭ3 with incompatible product attributes.
+
+    A repeated designation is not an error by itself. A warning is emitted
+    only when two rows with the same normalized designation carry explicit,
+    non-intersecting electrical parameter signatures (nominal voltage or
+    product type token). Rows without explicit attributes never conflict.
+    """
+    occurrences: dict = {}
+    for row in model.spec_rows:
+        ref = row.provenance
+        if ref is None:
+            continue
+        for designation in row.designations:
+            occurrences.setdefault(designation.normalized, []).append((row, ref))
+    out = []
+    for designation, places in sorted(occurrences.items()):
+        if len(places) < 2 or len(out) >= MAX_PARAM_EXAMPLES:
+            continue
+        conflicts = []
+        for index, (left_row, left_ref) in enumerate(places):
+            for right_row, right_ref in places[index + 1:]:
+                left_attr = left_row.attributes or extract_attributes(left_row.name)
+                right_attr = right_row.attributes or extract_attributes(right_row.name)
+                left_v, right_v = set(left_attr.get('voltages', ())), set(right_attr.get('voltages', ()))
+                if left_v and right_v and not (left_v & right_v):
+                    conflicts.append((left_ref, right_ref, 'напряжение', sorted(left_v | right_v)))
+                    continue
+                left_t, right_t = set(left_attr.get('type_tokens', ())), set(right_attr.get('type_tokens', ()))
+                if left_t and right_t and not (left_t & right_t):
+                    conflicts.append((left_ref, right_ref, 'тип изделия', sorted(left_t | right_t)[:6]))
+        if not conflicts:
+            continue
+        left_ref, right_ref, kind, values = conflicts[0]
+        out.append(issue(
+            'warning', CODE_PARAM_CONFLICT, right_ref.document,
+            f'{left_ref.describe()}; {right_ref.describe()}',
+            f'Для проверки инженером: обозначение «{designation}» встречается в нескольких строках ПЭ3 '
+            f'с несовместимыми данными изделия. Атрибут «{kind}» различается: {", ".join(values)}. '
+            'Это не подтверждённая ошибка КД; автоматический выбор правильного варианта не выполняется.',
+            'Сопоставьте обе строки с Э3 и документацией изготовителя. Решение принимает инженер; '
+            'исходные строки документа не изменяются.',
+        ))
+    return out
+
+
+def verify_confusable_model_tokens(model: EngineeringModel) -> list[dict]:
+    """EM-112-2: visually confusable model tokens across Э3 and ПЭ3.
+
+    Universal: any pair of model-like tokens of equal structure differing in
+    exactly one known confusable character (O/0, I/1, S/5, B/8, ...). Purely
+    informational; no automatic replacement is performed.
+    """
+    from confusable_designations import find_candidates
+
+    if not model.e3_model_tokens or not model.pe3_model_tokens:
+        return []
+    out = []
+    for left, right, label in find_candidates(model.e3_model_tokens, model.pe3_model_tokens):
+        e3_ref = sorted(model.e3_model_tokens[left], key=lambda r: (r.document, r.page or 0))[0]
+        pe3_ref = sorted(model.pe3_model_tokens[right], key=lambda r: (r.document, r.page or 0))[0]
+        out.append(issue(
+            'info', CODE_CONFUSABLE_MODEL, pe3_ref.document,
+            f'Э3: {e3_ref.describe()}; ПЭ3: {pe3_ref.describe()}',
+            f'Возможное несоответствие обозначения исполнения: в Э3 «{left}», в ПЭ3 «{right}». '
+            f'Отличие: {label} (визуально похожие символы). Это кандидат на опечатку, а не '
+            'подтверждённая ошибка; символы не заменяются автоматически.',
+            'Сверьте обозначение исполнения с исходным проектом и документацией изготовителя. '
+            'Решение принимает инженер.',
+        ))
+    return out

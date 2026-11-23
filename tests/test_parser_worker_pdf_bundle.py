@@ -41,7 +41,7 @@ def run_worker(tmp_path, monkeypatch):
 def test_worker_returns_exact_expected_pdf_findings(bundle, run_worker):
     expected = json.loads((TESTS / "fixtures/parser-worker-pdf-findings.json").read_bytes())
     actual = run_worker(list(bundle.items()))
-    assert len(expected) == len(actual) == 4
+    assert len(expected) == len(actual) == 5
     assert sorted(actual, key=lambda item: item["code"]) == sorted(
         expected, key=lambda item: item["code"]
     )
@@ -73,6 +73,7 @@ def test_worker_skips_pair_comparison_when_two_e3_documents_differ(bundle, run_w
     assert Counter(item["code"] for item in findings) == {
         "KD-020": 2, "KD-SET-102": 1, "KD-SET-103": 1, "KD-SET-201": 1,
         "KD-SET-202": 1, "KD-SET-203": 1, "KD-PE-104": 1,
+        "KD-EM-108-2": 1, "KD-EM-109-2": 1,
     }
     ambiguity = next(item for item in findings if item["code"] == "KD-SET-103")
     assert ambiguity["severity"] == "info"

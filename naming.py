@@ -12,13 +12,18 @@ CYR_LOOKALIKES = str.maketrans('АВСЕНКМОРТХУавсенкмортху
 
 # Default reference class prefix (historical behavior). Override via
 # configure_reference_classes() with a config-driven pattern.
-DEFAULT_CLASS_PREFIX = r'(?:[123])?(?:QF|SF|KM|KK|KV|KT|TA|SB|HLG|HLW|XG|XT|XN|XL|X|PAV)'
+DEFAULT_CLASS_PREFIX = (
+    r'(?:\d{1,2})?(?:HLG|HLW|HL|KLD|KM|KK|KV|KT|KA|KL|K|'
+    r'QF|SF|TA|SB|XG|XT|XN|XL|X|PAV)'
+)
 
 TAG_PREFIX = DEFAULT_CLASS_PREFIX  # historical name, re-exported for compat
 
 _CLASS_PREFIX = DEFAULT_CLASS_PREFIX
 
-RANGE = re.compile(r'^([\d]*[A-ZА-Я]+)(\d+)\.{2,3}([\d]*[A-ZА-Я]+)?(\d+)$', re.I)
+# An explicit range separator: three dots or an en/em dash.  An ASCII hyphen is
+# not accepted because it is common inside product type codes.
+RANGE = re.compile(r'^([\d]*[A-ZА-Я]+)(\d+)(?:\.{2,3}|[–—])([\d]*[A-ZА-Я]+)?(\d+)$', re.I)
 
 
 def configure_reference_classes(prefix_regex: str) -> None:

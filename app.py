@@ -129,8 +129,20 @@ async def check(files: list[UploadFile] = File(...)):
     pairs, pair_findings = pair_analysis_plan(analysis_sources)
     issues.extend(pair_findings)
     for scheme, spec in pairs:
-        issues.extend(crosscheck(scheme[0], scheme[3], spec[0], spec[3]))
-    issues = apply_engineering_findings(issues, pdf_sources, load_cfg())
+        try:
+            issues.extend(crosscheck(scheme[0], scheme[3], spec[0], spec[3]))
+        except Exception:
+            # A pair-level parser failure is reported as a structured issue;
+            # internal exception details never leak into the response.
+            issues.append({"severity": "error", "code": "KD-000",
+                           "file": f"{scheme[0]} / {spec[0]}",
+                           "location": "Сверка Э3 и ПЭ3",
+                           "message": "Не удалось выполнить сверку пары Э3/ПЭ3: внутренний сбой анализатора",
+                           "recommendation": "Повторите проверку; если сбой повторяется, сохраните комплект и передайте его разработчикам"})
+    # All uploaded PDFs (including СП/ВО without designation-typed names) feed
+    # the engineering model; designation-typed pairs alone would leave
+    # document-reference checks (KD-EM-108-2) without any model to verify.
+    issues = apply_engineering_findings(issues, full_set_sources, load_cfg())
     for err in errors:
         issues.append({"severity":"error", "code":"KD-000", "file":err["file"], "location":"Загрузка", "message":err["message"], "recommendation":"Предоставьте корректный файл поддерживаемого формата"})
     # Every new check independently retrieves the current checklist when configured.

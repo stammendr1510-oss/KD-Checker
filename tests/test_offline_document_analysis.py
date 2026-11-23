@@ -32,7 +32,7 @@ def bundle():
 def test_four_pdf_documents_produce_source_backed_findings(bundle, config):
     findings = check_documents(bundle, config)
     assert sorted(item["code"] for item in findings) == [
-        "KD-PE-100", "KD-PE-104", "KD-SET-201", "KD-SET-203",
+        "KD-EM-108-2", "KD-PE-100", "KD-PE-104", "KD-SET-201", "KD-SET-203",
     ]
     expected = {
         "KD-SET-201": ("ВО", "info", "Состав загруженного набора", "4 загруженных PDF",
@@ -43,6 +43,8 @@ def test_four_pdf_documents_produce_source_backed_findings(bundle, config):
                       "«1KM1» распознано в 2 разных строках", "не подтверждённая ошибка КД"),
         "KD-PE-100": ("ПЭ3", "info", "Сопоставление Э3 ↔ ПЭ3",
                       "1KM1: лист(ы) PDF 1; XT1: лист(ы) PDF 1", "выборочная машинная сверка"),
+        "KD-EM-108-2": ("СП", "warning", "лист 1, строка 2", SP_REFERENCE,
+                        "Проверьте комплектность загрузки"),
     }
     for item in findings:
         kind, severity, location, reason, qualification = expected[item["code"]]
