@@ -24,7 +24,7 @@ def bundle():
     return [
         (f"{BASE}.ВО.pdf", pdf_pages("SYNTHETIC ONLY - general arrangement")),
         (f"{BASE}.Э3.pdf", pdf_pages("SYNTHETIC ONLY - 1KM1 XT1")),
-        (f"{BASE}.ПЭ3.pdf", pe3([[('1KM1', 1), ('1KM1', 1), ('XT1', 1)]])),
+        (f"{BASE}.ПЭ3.pdf", pe3([[("1KM1", 1), ("1KM1", 1), ("XT1", 1)]])),
         (f"{BASE}.СП.pdf", specification_pdf([SP_REFERENCE])),
     ]
 
