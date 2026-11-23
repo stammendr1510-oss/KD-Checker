@@ -131,7 +131,7 @@ P0 не подтверждён ни один.
 - Заголовок: `KD-PE-106: Independent Engineering Acceptance and Windows 11 Validation`
 - Состояние: Draft, merge не выполняется.
 - SourceCraft PR: **#106** —
-  `https://sourcecraft.dev/stammendrs1510/kd-checker/pulls/106`
+  `https://sourcecraft.dev/stammendrs1510/kd-checker/pr/106`
 - Публикация: SourceCraft (прямой push в GitHub недоступен без токена).
   GitHub Draft PR #101 не изменялся.
 
