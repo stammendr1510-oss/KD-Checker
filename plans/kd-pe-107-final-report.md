@@ -300,10 +300,14 @@ id, версия, условие (предикат), обязательные д
 | Ветка | `feature/kd-pe-107-real-kd-diagnostics` |
 | База PR | `feature/kd-pe-106-engineering-acceptance` |
 | Тип PR | Draft |
+| Draft PR | **#107** |
+| Ссылка | `https://sourcecraft.dev/stammendrs1510/kd-checker/pull/107` |
+| Дубли PR | не обнаружены (фильтр по `source_branch`) |
 | Merge | не выполнялся |
 | `main`/production | не затрагивались |
 | Коммит реализации | `83807c63869f650f5fd7e036b6a6c2f816ca2aae` |
-| Коммит документации | фиксируется после коммита отчёта |
+| Коммит отчёта | `2c2f4c3e61dca2348c71ae08a10763f1617ec43f` |
+| Head при создании PR | `2c2f4c3e61dca2348c71ae08a10763f1617ec43f` |
 
 Сгенерированные артефакты `acceptance-report.json` и
 `kd-pe-107-selfcheck.json` намеренно **не коммитятся**: это результаты
