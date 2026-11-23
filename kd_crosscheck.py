@@ -6,15 +6,25 @@ from itertools import islice
 from pathlib import Path
 import fitz
 from pdf_match_evidence import MAX_LOCATIONS, MAX_MATCHES, location_key, source
+from designation_conflicts import COMPATIBLE, compare_names, conflict_findings
+from confusable_designations import confusable_findings, model_tokens
 
 MAX_PDF_PAGES = 100
 MAX_SCHEME_DESIGNATIONS_PER_PAGE = 5000
 MAX_SCHEME_MENTIONS = 50000
+MAX_NAME_LENGTH = 300
+TRUNCATION_MARK = '…'
 
 # Identify components in the electrical scheme primarily from unambiguous wire tags.
-TAG_PREFIX = r'(?:[123])?(?:QF|SF|KM|KK|KV|KT|TA|SB|HLG|HLW|XG|XT|XN|XL|X|PAV)'
+# Longer alternatives come first so KLD1 is not read as K1 and HLG1 is not HL1.
+TAG_PREFIX = (
+    r'(?:\d{1,2})?(?:HLG|HLW|HL|KLD|KM|KK|KV|KT|KA|KL|K|'
+    r'QF|SF|TA|SB|XG|XT|XN|XL|X|PAV)'
+)
 TAG = re.compile(r'(?<![\w.])'+TAG_PREFIX+r'\d+(?:\.\d+)?(?=\s*:|\b)', re.I)
-RANGE = re.compile(r'^([\d]*[A-ZА-Я]+)(\d+)\.{2,3}([\d]*[A-ZА-Я]+)?(\d+)$', re.I)
+# An explicit range separator: three dots or an en/em dash.  An ASCII hyphen is
+# not accepted because it is common inside product type codes.
+RANGE = re.compile(r'^([\d]*[A-ZА-Я]+)(\d+)(?:\.{2,3}|[–—])([\d]*[A-ZА-Я]+)?(\d+)$', re.I)
 CYR_LOOKALIKES = str.maketrans('АВСЕНКМОРТХУавсенкмортху', 'ABCEHKMOPTXYaBcehkmoptxy')
 
 def normalized(s):
@@ -31,34 +41,73 @@ def pair_key(name):
 def issue(level, code, file, place, message, recommendation):
     return {'severity':level, 'code':code, 'file':file, 'location':place, 'message':message, 'recommendation':recommendation}
 
+def _is_complete_notation(text):
+    value = normalized(text)
+    return bool(TAG.fullmatch(value) or RANGE.fullmatch(value))
+
+
+def _is_incomplete_notation(text):
+    value = normalized(text)
+    return value.endswith('.') or '..' in value and not RANGE.fullmatch(value)
+
+
+def _split_single_line(line):
+    """Split tokens of one physical line, preserving the legacy ambiguity rule.
+
+    A complete designation followed by another token on the *same* line is
+    ambiguous (``XT1 2`` must not become ``XT1`` or ``XT12``).  A wrapped range
+    such as ``1TA1... 1TA3`` is joined because the first token is incomplete.
+    """
+    joined = ''
+    for token in (token for token in line.split() if token):
+        if not joined:
+            joined = token
+            continue
+        left = normalized(joined)
+        if (TAG.fullmatch(left) or RANGE.fullmatch(left)) and not token.startswith('.'):
+            return line.strip(), True
+        joined += token
+    return joined, False
+
+
 def _notation_parts(raw):
     """Split a PE3 designator cell into ``(fragment, ambiguous)`` pairs.
 
-    Only explicit separators (``;`` and ``,``) start a new fragment.  Inside a
-    fragment, whitespace/newlines may only complete a wrapped notation
-    (``1TA1...`` + ``1TA3`` or ``3TA1`` + ``...3TA3``).  If a complete
-    designation/range is followed by a token that does not continue it, the
-    whole fragment is marked ambiguous so the caller records it in ``unknown``
-    instead of inventing separate designations from a numeric gap
-    (``XT1 2`` must never become ``XT1`` or ``XT12``).
+    Explicit separators ``;`` and ``,`` always start a new fragment.  A line
+    break between two complete designations is also a separator (``TA2`` newline
+    ``TA3``), while a line break inside a wrapped range continues it
+    (``1TA1...`` + ``1TA3`` or ``3TA1`` + ``...3TA3``).  A complete designation
+    followed by a non-continuation token on another line is kept ambiguous:
+    ``XT1`` + ``2`` must never invent ``XT1`` or ``XT12``.
     """
     parts = []
     for chunk in re.split(r'[;,]', raw.replace('…', '...')):
         stripped = chunk.strip()
         if not stripped:
             continue
-        joined = ''
-        ambiguous = False
-        for token in (token for token in re.split(r'\s+', stripped) if token):
-            if not joined:
-                joined = token
+        pending = None
+        for line in re.split(r'\r?\n', stripped):
+            line = line.strip()
+            if not line:
                 continue
-            left = normalized(joined)
-            if (TAG.fullmatch(left) or RANGE.fullmatch(left)) and not token.startswith('.'):
-                ambiguous = True
-                break
-            joined += token
-        parts.append((stripped, True) if ambiguous else (joined, False))
+            if pending is None:
+                pending = line
+                continue
+            first = line.split()[0]
+            if not _is_complete_notation(pending) or first.startswith('.'):
+                pending += line
+                continue
+            if _is_complete_notation(first):
+                fragment, ambiguous = _split_single_line(pending)
+                parts.append((fragment, ambiguous))
+                pending = line
+                continue
+            # Complete designation followed by a non-continuation token on a
+            # new line: record the whole fragment as ambiguous, do not guess.
+            parts.append((pending + '\n' + line, True))
+            pending = None
+        if pending is not None:
+            parts.append(_split_single_line(pending))
     return parts
 
 
@@ -70,22 +119,64 @@ def expand_notation(raw):
             continue
         part = normalized(fragment)
         if not part: continue
-        if '..' not in part:
-            if TAG.fullmatch(part): out.add(part)
-            else: unknown.append(fragment)
-            continue
         m = RANGE.fullmatch(part)
-        if not m:
-            unknown.append(fragment); continue
-        left, first, right, last = m.groups()
-        if right and right != left or int(last)<int(first) or int(last)-int(first)>100:
-            unknown.append(fragment); continue
-        out.update(left+str(i) for i in range(int(first),int(last)+1))
+        if m:
+            left, first, right, last = m.groups()
+            if right and right != left or int(last)<int(first) or int(last)-int(first)>100:
+                unknown.append(fragment); continue
+            out.update(left+str(i) for i in range(int(first),int(last)+1))
+            continue
+        if TAG.fullmatch(part):
+            out.add(part)
+        else:
+            unknown.append(fragment)
     return out, unknown
 
-def _row_rules(page, column_left):
+def _designator_column(page, words):
+    """Find the designator column from its header, with a safe fallback.
+
+    Real PE3 forms use different column widths.  The previous fixed 9%--18.8%
+    window could miss a whole grouped row such as ``TA2;TA3``.  The header and
+    its vertical borders are structural evidence; when they are absent the
+    historical fallback is preserved.
+    """
+    left, right = page.rect.width*.09, page.rect.width*.188
+    headers = [
+        word for word in words
+        if word[1] < page.rect.height*.1
+        and re.fullmatch(r'(?:поз\.?|обознач\w*|позиц\w*)', word[4].casefold().rstrip('.'))
+    ]
+    if not headers:
+        return left, right
+    header_left = min(word[0] for word in headers)
+    header_right = max(word[2] for word in headers)
+    center_x = (header_left + header_right) / 2
+    center_y = sum((word[1]+word[3])/2 for word in headers) / len(headers)
+    borders = set()
+    for drawing in page.get_drawings():
+        for item in drawing['items']:
+            if item[0] == 'l':
+                a, b = item[1:3]
+                if abs(a.x-b.x) < .5 and min(a.y, b.y) <= center_y <= max(a.y, b.y):
+                    borders.add((a.x+b.x)/2)
+            elif item[0] == 're':
+                rect = item[1]
+                if rect.y0 <= center_y <= rect.y1:
+                    borders.update((rect.x0, rect.x1))
+    before = [x for x in borders if x < center_x]
+    after = [x for x in borders if x > center_x]
+    if before and after:
+        candidate = (max(before), min(after))
+        if 10 <= candidate[1]-candidate[0] <= page.rect.width*.35:
+            return candidate
+    if header_right - header_left >= 10:
+        return header_left - 2, header_right + 2
+    return left, right
+
+
+def _row_rules(page, column_left, column_right):
     """Horizontal rules crossing the designator column (PDF points)."""
-    left, right = column_left, page.rect.width*.188
+    left, right = column_left, column_right
     rules = set()
     for drawing in page.get_drawings():
         for item in drawing['items']:
@@ -226,13 +317,14 @@ def get_spec_rows(pdf_bytes, *, include_evidence=False):
         for pi, page in enumerate(islice(pdf, MAX_PDF_PAGES)):
             words=page.get_text('words',sort=True)
             page_size = (float(page.cropbox.width), float(page.cropbox.height))
+            column_left, column_right = _designator_column(page, words)
             name_words = [t for t in words
-                          if page.rect.width*.188 <= t[0] < page.rect.width*.70
+                          if column_right <= t[0] < page.rect.width*.70
                           and t[1] < page.rect.height*.83]
             qty = _quantity_words(page, words)
             previous=50
-            column=[t for t in words if page.rect.width*.09 <= t[0] < page.rect.width*.188 and t[1]<page.rect.height*.83]
-            rules = _row_rules(page, min((w[0] for w in column), default=page.rect.width*.09))
+            column=[t for t in words if column_left <= t[0] < column_right and t[1]<page.rect.height*.83]
+            rules = _row_rules(page, min((w[0] for w in column), default=column_left), column_right)
             for index, w in enumerate(qty):
                 des, previous = _cell_words(column, qty, index, rules, previous)
                 # PDF block/line identifiers preserve wrapped fragments without
@@ -256,13 +348,15 @@ def get_spec_rows(pdf_bytes, *, include_evidence=False):
                     name=''
                     name_confidence='low'
                     if band:
-                        name_left = bounds[1] if bounds else page.rect.width*.188
+                        name_left = bounds[1] if bounds else column_right
                         selected = [t for t in name_words
                                     if name_left <= t[0] < page.rect.width*.70
                                     and band[0] < (t[1]+t[3])/2 < band[1]]
                         if selected:
                             selected.sort(key=lambda t:(t[1],t[0]))
-                            name = re.sub(r'\s+', ' ', ' '.join(t[4] for t in selected)).strip()[:300]
+                            name = re.sub(r'\s+', ' ', ' '.join(t[4] for t in selected)).strip()
+                            if len(name) > MAX_NAME_LENGTH:
+                                name = name[:MAX_NAME_LENGTH-1] + TRUNCATION_MARK
                             name_confidence='medium'
                     rows.append({'page':pi+1,'source':raw,'quantity':int(w[4]),'entries':entries,'unknown':unknown,
                                  'row_band':band,
@@ -294,8 +388,28 @@ def duplicate_findings(rows, filename):
     for designation, cells in sorted(occurrences.items()):
         if len(cells) < 2:
             continue
+        ordered_rows = [row for _, row in sorted(cells.items())]
         locations = [f"Лист {row['page']}, строка таблицы {row['table_row']}"
-                     for _, row in sorted(cells.items())]
+                     for row in ordered_rows]
+        names = [str(row.get('name') or '').strip() for row in ordered_rows]
+        compatible = (
+            len(names) >= 2
+            and all(names)
+            and all(compare_names(names[0], other) == COMPATIBLE for other in names[1:])
+        )
+        if compatible:
+            # A repeated designation with the same product description may be a
+            # legitimate continuation or a multi-sheet reference.  It is not a
+            # duplicate error, but the engineer still sees the repeat.
+            findings.append(issue(
+                'info', 'KD-PE-104', filename, '; '.join(locations),
+                f'Для проверки инженером: обозначение «{designation}» повторяется в '
+                f'{len(cells)} строках ПЭ3, но наименование изделия совпадает. '
+                'Повтор может быть продолжением записи или многолистовой ссылкой.',
+                'Сопоставьте строки с исходным документом. Совместимые данные не '
+                'превращаются в предупреждение; решение принимает инженер.',
+            ))
+            continue
         findings.append(issue(
             'warning', 'KD-PE-104', filename, '; '.join(locations),
             f'Для проверки инженером: обозначение «{designation}» распознано в {len(cells)} разных строках одного ПЭ3.',
@@ -303,12 +417,32 @@ def duplicate_findings(rows, filename):
             'включая заголовок и пустые строки. Повтор может относиться к продолжению записи или особенностям '
             'комплектования; это не подтверждённая ошибка КД.',
         ))
+    # A repeated designation is not automatically an error: only incompatible
+    # product attributes make it a conflict.  The two diagnostics stay separate.
+    findings.extend(conflict_findings(rows, filename))
     return findings
 
 
 def check_spec_duplicates(filename, pdf_bytes):
     """Standalone PE3 validation; caller supplies a single document's bytes."""
     return duplicate_findings(get_spec_rows(pdf_bytes), filename)
+
+
+def pe3_text_designations(pdf_bytes):
+    """Return designators visible in the PE3 text layer, bounded by page limits.
+
+    This is *presence evidence only*.  It prevents a false "missing product"
+    finding when a grouped row could not be parsed, without ever inventing a
+    match for KD-PE-100.
+    """
+    found = set()
+    with fitz.open(stream=pdf_bytes, filetype='pdf') as pdf:
+        for page in islice(pdf, MAX_PDF_PAGES):
+            for match in TAG.finditer(page.get_text()):
+                found.add(normalized(match.group(0)))
+                if len(found) >= MAX_SCHEME_MENTIONS:
+                    return found
+    return found
 
 
 def _separated_by_rule(page, a, b):
@@ -413,11 +547,13 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes, *, include_evidence=False):
     if not rows:
         return [issue('warning','KD-PE-000',pe_filename,'PDF','Не удалось надёжно извлечь строки перечня элементов','Используйте структурированную выгрузку или Excel для точной сверки')]
     from e3_pe3_inventory import compare_inventories, extract_mentions
+    pe3_text = pe3_text_designations(pe_bytes)
     scheme=set(); script_candidates=defaultdict(set); scheme_pages=defaultdict(set)
     script_form_pages=defaultdict(lambda: defaultdict(set))
     spec=set().union(*(r['entries'] for r in rows))
     scheme_sources=defaultdict(list)
     scheme_mentions=[]
+    e3_model_pages=defaultdict(set)
     e3_pages_processed=0
     e3_pages_with_text=0
     e3_word_count=0
@@ -430,6 +566,8 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes, *, include_evidence=False):
             if words:
                 e3_pages_with_text += 1
             e3_word_count += len(words)
+            for token in model_tokens(page.get_text()):
+                e3_model_pages[token].add(pi + 1)
             page_values = list(islice(scheme_designations(page), MAX_SCHEME_DESIGNATIONS_PER_PAGE))
             if len(page_values) >= MAX_SCHEME_DESIGNATIONS_PER_PAGE:
                 scheme_truncated = True
@@ -505,7 +643,9 @@ def run(e3_filename,e3_bytes,pe_filename,pe_bytes, *, include_evidence=False):
         e3_pages_with_text=e3_pages_with_text,
         e3_truncated=e3_truncated or scheme_truncated,
         pe3_truncated=any(row.get('pdf_truncated') for row in rows),
+        pe3_text_designations=pe3_text,
     ))
+    findings.extend(confusable_findings(e3_filename, pe_filename, e3_model_pages, rows))
     return findings
 
 

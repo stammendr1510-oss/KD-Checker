@@ -1,26 +1,26 @@
 <#
 .SYNOPSIS
-    KD-PE-106 acceptance run for Windows 11.
+    KD-PE-107 acceptance run for Windows 11.
 
 .DESCRIPTION
     Reproducible, offline-capable acceptance script for the KD Checker candidate
-    commit. It deploys into a SEPARATE directory, verifies the exact commit SHA,
-    creates an isolated virtual environment, runs the dependency policy, the
-    targeted KD-PE-105 tests, the full pytest suite, the synthetic acceptance
-    stand, and finally starts the application twice to prove that it can be
-    launched, opened and stopped cleanly.
+    commit. It deploys into a SEPARATE source directory, verifies the exact
+    commit SHA, creates an isolated virtual environment, runs the dependency
+    policy, the targeted KD-PE-105/107 tests, the full pytest suite, the
+    synthetic acceptance stand, and finally starts the application twice.
 
-    It never touches the existing working directories
-    C:\KD-Checker\work, C:\KD-Checker\codex, C:\KD-Checker\integration or
-    C:\KD-Checker\coordination, never merges and never pushes.
+    The script is intentionally ASCII-only so Windows PowerShell 5.1 and
+    PowerShell 7 read it identically. It never writes logs or summaries into the
+    source checkout before git clone; results go to a separate ResultsDir.
 
-    Every step writes a log into <WorkDir>\logs. A machine-readable summary is
-    written to <WorkDir>\windows11-acceptance-summary.json.
+    It never touches existing working directories, never merges and never
+    pushes. It never deletes a non-empty directory.
 
-    Exit code: 0 only when every executed step passed. Any failure returns 1 and
-    the summary keeps the failing step visible. A step that could not be run is
-    reported as NOT_VERIFIED and also returns 1: Windows 11 acceptance is never
-    inferred from a skipped step.
+    Exit code:
+      0 - every executed step passed;
+      1 - at least one executed step failed;
+      2 - no failures, but at least one step is NOT_VERIFIED.
+    Windows 11 acceptance is never inferred from a skipped step.
 
 .PARAMETER RepoUrl
     Git repository to deploy from.
@@ -29,7 +29,12 @@
     Exact commit that must be checked out. Mismatch stops the run.
 
 .PARAMETER WorkDir
-    Separate acceptance directory. Must not exist or must be empty.
+    Separate source directory. It must not exist, be empty, or be reused with
+    -SkipClone. The script never deletes user files.
+
+.PARAMETER ResultsDir
+    Directory for logs and the JSON summary. Defaults to "<WorkDir>-results" and
+    is always outside the source checkout.
 
 .PARAMETER PythonCommand
     Python launcher command, for example "py -3.13" or "python".
@@ -42,13 +47,16 @@
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File tools\windows11_acceptance.ps1 `
-        -WorkDir C:\KD-Checker-acceptance -PythonCommand "py -3.13"
+        -WorkDir C:\KD-Checker-acceptance `
+        -ResultsDir C:\KD-Checker-acceptance-results `
+        -PythonCommand "py -3.13"
 #>
 [CmdletBinding()]
 param(
     [string]$RepoUrl = "https://github.com/stammendr1510-oss/KD-Checker.git",
-    [string]$ExpectedSha = "1d1b603cae14f2adba8c043e85404e239aae4d96",
+    [string]$ExpectedSha = "385db15087afca3a8db5dca5573846aef02f9710",
     [string]$WorkDir = "C:\KD-Checker-acceptance",
+    [string]$ResultsDir = "",
     [string]$PythonCommand = "py -3.13",
     [switch]$SkipClone
 )
@@ -56,19 +64,23 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$results = New-Object System.Collections.Generic.List[object]
-$logs = Join-Path $WorkDir "logs"
-$summaryPath = Join-Path $WorkDir "windows11-acceptance-summary.json"
+if ([string]::IsNullOrWhiteSpace($ResultsDir)) {
+    $ResultsDir = "$WorkDir-results"
+}
+$logs = Join-Path $ResultsDir "logs"
+$summaryPath = Join-Path $ResultsDir "windows11-acceptance-summary.json"
 $appProcess = $null
+
+$results = New-Object System.Collections.Generic.List[object]
 
 function Write-StepResult {
     param([string]$Name, [string]$Status, [string]$Detail, [string]$Log)
     $entry = [ordered]@{
-        step    = $Name
-        status  = $Status
-        detail  = $Detail
-        log     = $Log
-        at_utc  = (Get-Date).ToUniversalTime().ToString("o")
+        step   = $Name
+        status = $Status
+        detail = $Detail
+        log    = $Log
+        at_utc = (Get-Date).ToUniversalTime().ToString("o")
     }
     $results.Add([pscustomobject]$entry)
     Write-Host ("[{0}] {1} - {2}" -f $Status, $Name, $Detail)
@@ -134,28 +146,48 @@ function Wait-ForEndpoint {
     return $false
 }
 
+function Test-WorkDirIsEmpty {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $true }
+    $item = Get-Item -LiteralPath $Path -Force
+    if (-not $item.PSIsContainer) { return $false }
+    $children = Get-ChildItem -LiteralPath $Path -Force
+    return -not ($children | Select-Object -First 1)
+}
+
 try {
-    New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
+    # Results are always outside the source checkout.  Nothing is created in
+    # WorkDir before git clone, which fixes the previous "destination path '.'
+    # already exists and is not an empty directory" failure.
+    New-Item -ItemType Directory -Path $ResultsDir -Force | Out-Null
     New-Item -ItemType Directory -Path $logs -Force | Out-Null
+
+    $syntaxTokens = $null
+    $syntaxErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile(
+        $PSCommandPath, [ref]$syntaxTokens, [ref]$syntaxErrors) | Out-Null
+    if ($syntaxErrors -and $syntaxErrors.Count -gt 0) {
+        throw ("PowerShell syntax errors: {0}" -f ($syntaxErrors | ForEach-Object { $_.Message } | Select-Object -First 5))
+    }
 
     Write-StepResult -Name "environment" -Status "INFO" `
         -Detail ("PowerShell {0}, {1}" -f $PSVersionTable.PSVersion, [System.Environment]::OSVersion.VersionString) `
         -Log $logs
 
     if (-not $SkipClone) {
-        $existing = Get-ChildItem -Path $WorkDir -Force | Where-Object { $_.Name -ne "logs" -and $_.Name -ne "windows11-acceptance-summary.json" }
-        if ($existing) {
-            throw "WorkDir is not empty: $WorkDir. Use a separate directory or -SkipClone."
+        if ((Test-Path -LiteralPath $WorkDir) -and -not (Test-WorkDirIsEmpty -Path $WorkDir)) {
+            throw ("WorkDir is not empty: {0}. Use a new directory or -SkipClone. Nothing was deleted." -f $WorkDir)
         }
         $ok = Invoke-LoggedStep -Name "git_clone" -Action {
+            & git clone --no-checkout $RepoUrl $WorkDir
+            if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
             Push-Location $WorkDir
-            try {
-                & git clone --no-checkout $RepoUrl .
-                & git fetch --all --prune
-            }
-            finally { Pop-Location }
+            try { & git fetch --all --prune } finally { Pop-Location }
         }
         if (-not $ok) { throw "git clone failed" }
+    }
+    elseif (-not (Test-Path -LiteralPath (Join-Path $WorkDir ".git"))) {
+        throw ("SkipClone requires an existing git checkout: {0}" -f $WorkDir)
     }
 
     $ok = Invoke-LoggedStep -Name "git_checkout_exact_sha" -Action {
@@ -192,17 +224,17 @@ try {
         finally { Pop-Location }
     } | Out-Null
 
-    Invoke-LoggedStep -Name "targeted_kd_pe_105_tests" -Action {
+    Invoke-LoggedStep -Name "targeted_kd_pe_107_tests" -Action {
         Push-Location $WorkDir
         try {
             & .\.venv\Scripts\python.exe -m pytest -q `
+                tests\test_kd_pe_107_matching.py `
+                tests\test_designation_conflicts.py `
+                tests\test_confusable_designations.py `
+                tests\test_kd_pe_107_pe3_structure.py `
+                tests\test_kd_pe_107_regression.py `
                 tests\test_identifier_classification.py `
-                tests\test_kd_pe_105_confidence_model.py `
-                tests\test_kd_pe_105_evidence.py `
-                tests\test_e3_pe3_row_matching.py `
-                tests\test_kd_pe_105_diagnostics.py `
-                tests\test_e3_pe3_inventory.py `
-                tests\test_e3_pe3_details.py
+                tests\test_e3_pe3_inventory.py
         }
         finally { Pop-Location }
     } | Out-Null
@@ -222,17 +254,20 @@ try {
         finally { Pop-Location }
     } | Out-Null
 
-    Invoke-LoggedStep -Name "synthetic_stand_accept" -Action {
+    Invoke-LoggedStep -Name "kd_pe_107_reference_selfcheck" -Action {
         Push-Location $WorkDir
         try {
-            & .\.venv\Scripts\python.exe synthetic_stand.py accept --synthetic-only --workspace .\acceptance-stand
-            if ($LASTEXITCODE -ne 0) { throw "synthetic stand returned $LASTEXITCODE" }
+            & .\.venv\Scripts\python.exe tools\kd_pe_107_selfcheck.py --json kd-pe-107-selfcheck.json
+            if ($LASTEXITCODE -ne 0) { throw "KD-PE-107 self-check returned $LASTEXITCODE" }
         }
         finally { Pop-Location }
     } | Out-Null
 
     # Two launches prove that the application starts, serves the UI and stops
-    # cleanly. The second launch uses the same isolated directory on purpose.
+    # cleanly. The expected title is built from code points so this file stays
+    # pure ASCII for Windows PowerShell 5.1.
+    $expectedTitle = -join ([char[]](0x041F, 0x0440, 0x043E, 0x0432, 0x0435,
+                                     0x0440, 0x043A, 0x0430, 0x0020, 0x041A, 0x0414))
     foreach ($attempt in 1..2) {
         $name = "application_launch_$attempt"
         $log = Join-Path $logs ("{0}.log" -f $name)
@@ -245,7 +280,7 @@ try {
                 throw "http://127.0.0.1:8765 did not answer within 90 seconds"
             }
             $page = Invoke-WebRequest -Uri "http://127.0.0.1:8765" -UseBasicParsing -TimeoutSec 10
-            if ($page.Content -notmatch "Проверка КД") {
+            if ($page.Content -notmatch [regex]::Escape($expectedTitle)) {
                 throw "UI page does not contain the expected title"
             }
             Write-StepResult -Name $name -Status "PASS" -Detail "UI reachable, page loaded" -Log $log
@@ -275,23 +310,25 @@ finally {
     $unverified = @($results | Where-Object { $_.status -eq "NOT_VERIFIED" })
     $verdict = if ($failed.Count -gt 0) { "FAIL" } elseif ($unverified.Count -gt 0) { "NOT_VERIFIED" } else { "PASS" }
     $summary = [ordered]@{
-        kind              = "kd-checker-windows11-acceptance-v1"
-        verdict           = $verdict
-        expected_sha      = $ExpectedSha
-        work_dir          = $WorkDir
-        platform          = [System.Environment]::OSVersion.VersionString
-        powershell        = $PSVersionTable.PSVersion.ToString()
-        python_command    = $PythonCommand
-        generated_at      = (Get-Date).ToUniversalTime().ToString("o")
-        failed_steps      = $failed.Count
+        kind               = "kd-checker-windows11-acceptance-v2"
+        verdict            = $verdict
+        expected_sha       = $ExpectedSha
+        work_dir           = $WorkDir
+        results_dir        = $ResultsDir
+        platform           = [System.Environment]::OSVersion.VersionString
+        powershell         = $PSVersionTable.PSVersion.ToString()
+        python_command     = $PythonCommand
+        generated_at       = (Get-Date).ToUniversalTime().ToString("o")
+        failed_steps       = $failed.Count
         not_verified_steps = $unverified.Count
-        steps             = $results
-        note              = "Windows 11 acceptance is valid only for the exact expected_sha above."
+        steps              = $results
+        note               = "Windows 11 acceptance is valid only for the exact expected_sha above."
     }
     $summary | ConvertTo-Json -Depth 6 | Set-Content -Path $summaryPath -Encoding UTF8
     Write-Host ""
     Write-Host ("Windows 11 acceptance verdict: {0}" -f $verdict)
     Write-Host ("Summary: {0}" -f $summaryPath)
-    if ($verdict -ne "PASS") { exit 1 }
+    if ($verdict -eq "FAIL") { exit 1 }
+    if ($verdict -eq "NOT_VERIFIED") { exit 2 }
     exit 0
 }

@@ -65,9 +65,14 @@ TYPE_NAMES = {
     "KK": "реле",
     "KV": "реле",
     "KT": "реле",
+    "KA": "реле",
+    "KL": "реле/контактор",
+    "K": "реле/контактор",
+    "KLD": "релейный модуль",
     "SB": "кнопка",
     "HLG": "лампа",
     "HLW": "лампа",
+    "HL": "лампа",
     "XT": "клеммник",
     "XN": "клеммник",
     "XL": "клеммник",
@@ -82,6 +87,9 @@ REASONS = frozenset({
     "quantity_mismatch", "reference_only", "no_text_layer", "pe3_not_parsed",
     "truncated", "no_matching_pe3_row", "row_matched_without_coverage",
     "row_ambiguous", "needs_context",
+    # The designation is visible in the PE3 text layer, but its row could not
+    # be parsed reliably.  This prevents a false "missing product" conclusion.
+    "present_in_unparsed_pe3_text",
     # Deprecated: emitted by schema v1 before block 2. Kept readable so old
     # stored details can still be inspected, but never produced again.
     "ambiguous_row",
@@ -102,6 +110,9 @@ REASON_LABELS = {
     "needs_context": (
         "обозначение неоднозначно; для отнесения к изделию требуется дополнительный контекст"
     ),
+    "present_in_unparsed_pe3_text": (
+        "обозначение присутствует в текстовом слое ПЭ3, но строка не разобрана достоверно"
+    ),
     "ambiguous_row": "устаревшая причина: неоднозначная строка ПЭ3",
 }
 
@@ -109,12 +120,17 @@ REASON_LABELS = {
 # Only ``under_expanded`` is proof that a row is under-specified; family/group
 # coincidence stays tentative.  They are re-exported here for compatibility.
 
-NOTE_RE = re.compile(
-    r"(?:\bсм\b|\bприм(?:еч)?|\bтабл|\bсоответств|\bпоз\.?|\bобознач|"
-    r"\bнаимен|\bкол\.?|\bлист|\bдокумент|\bсхем|\bЭ3\b|\bПЭ3\b)",
+# Only an explicit marker *adjacent to the token* changes its occurrence role.
+# A marker elsewhere on the line (for example a page reference in a table
+# header) must not hide a standalone device designation.
+REFERENCE_MARKER_RE = re.compile(
+    r"(?:\bсм\.?\s*|\bсмотри\s+|\bпоз\.?\s*|\bпозици[яи]\s*|"
+    r"\bприм(?:еч)?\.?\s*|\bтабл\.?\s*|\bлист\s*)$",
     re.I,
 )
+NOTE_LINE_RE = re.compile(r"^\s*прим(?:еч)?", re.I)
 DOC_REF_RE = re.compile(r"\b[А-ЯA-Z]{2,}\.\d{3,}\.\d{3,}\b", re.I)
+TRUNCATION_MARK = "…"
 CONNECTION_RE = re.compile(
     r"[A-ZА-Я0-9.]+\s*:\s*[A-ZА-Я0-9.]+\s*[-–—]\s*[A-ZА-Я0-9.]+\s*:"
 )
@@ -155,10 +171,12 @@ class SchemeComponent:
     requires_context: bool = False
 
 
-def _clean(value, limit):
+def _clean(value, limit, *, mark_truncation=False):
     text = str(value if value is not None else "")
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
+    if mark_truncation and len(text) > limit:
+        return text[:max(0, limit-1)] + TRUNCATION_MARK
     return text[:limit]
 
 
@@ -212,16 +230,34 @@ def parse_designation(designation):
     return match.group(1) + match.group(2), int(match.group(3))
 
 
+def _reference_role(line_text, word_text):
+    """Return a reference/note role only when the marker is adjacent.
+
+    A marker elsewhere on the line is context, not proof that the token is a
+    reference.  This is the KD106-02 rule: the property of the designation
+    (a standalone device label) is independent of a nearby word such as
+    ``лист``, ``табл`` or ``примечание``.
+    """
+    position = line_text.find(word_text)
+    before = line_text[:position] if position >= 0 else ""
+    if REFERENCE_MARKER_RE.search(before):
+        return "reference"
+    if NOTE_LINE_RE.match(line_text):
+        return "note"
+    return None
+
+
 def _classify_mention(word_text, norm_text, match, line_text):
     after = norm_text[match.end():match.end() + 1]
     if after == ":":
         return "reference"
     if any(mark in word_text for mark in ("...", "…")) or ";" in word_text:
         return "table"
-    if NOTE_RE.search(line_text) or DOC_REF_RE.search(line_text):
-        return "note"
     if line_text.count(":") >= 2 or CONNECTION_RE.search(line_text):
         return "reference"
+    role = _reference_role(line_text, word_text)
+    if role:
+        return role
     stripped = word_text.strip(".,;:()[]{}")
     if stripped.startswith(("-", "–", "—")):
         return "reference"
@@ -274,11 +310,11 @@ def extract_mentions(words, page, *, page_size=None, legacy_values=()):
                     raw=_clean(raw, 100),
                     page=page,
                     kind=kind,
-                    context=_clean(context, MAX_CONTEXT),
+                    context=_clean(context, MAX_CONTEXT, mark_truncation=True),
                     confidence=_kind_confidence(kind),
                     bbox=box,
                     page_size=size if box else None,
-                    line_text=_clean(line_text, MAX_CONTEXT),
+                    line_text=_clean(line_text, MAX_CONTEXT, mark_truncation=True),
                 ))
                 if len(found) >= MAX_PAGE_MENTIONS:
                     break
@@ -297,7 +333,7 @@ def extract_mentions(words, page, *, page_size=None, legacy_values=()):
             raw=_clean(value, 100),
             page=page,
             kind="split_label",
-            context=_clean(value, MAX_CONTEXT),
+            context=_clean(value, MAX_CONTEXT, mark_truncation=True),
             confidence="medium",
             bbox=None,
             page_size=None,
@@ -663,9 +699,13 @@ def _finding(severity, file, location, message, recommendation, details):
     }
 
 
-def _not_evaluated(e3_document, pe3_document, e3_pages, reason, *, ambiguous=(), partial=False, truncated=False):
+def _not_evaluated(e3_document, pe3_document, e3_pages, reason, *, ambiguous=(),
+                   partial=False, truncated=False, ambiguous_reason=None):
     details = _details_base(e3_document, pe3_document, "not_evaluated", reason, e3_pages)
-    details["ambiguous"] = [_ambiguous_item(component) for component in ambiguous[:MAX_AMBIGUOUS]]
+    details["ambiguous"] = [
+        _ambiguous_item(component, ambiguous_reason)
+        for component in ambiguous[:MAX_AMBIGUOUS]
+    ]
     details["partial"] = bool(partial)
     details["truncated"] = bool(truncated)
     message = (
@@ -695,9 +735,16 @@ def _match_confidence(group, row, reason, evidence, partial, truncated):
 
 def compare_inventories(e3_document, pe3_document, mentions, rows, *,
                         e3_word_count, e3_pages_processed, e3_pages_with_text,
-                        e3_truncated=False, pe3_truncated=False):
-    """Compare E3 components with expanded PE3 positions; return KD-PE-105 findings."""
+                        e3_truncated=False, pe3_truncated=False,
+                        pe3_text_designations=()):
+    """Compare E3 components with expanded PE3 positions; return KD-PE-105 findings.
+
+    ``pe3_text_designations`` is presence evidence from the PE3 text layer.  A
+    designation visible there but absent from parsed rows is *not* reported as
+    missing: the row extraction, not the engineering document, is uncertain.
+    """
     e3_pages = list(range(1, e3_pages_processed + 1))
+    text_evidence = set(pe3_text_designations or ())
     if e3_word_count == 0:
         return [_not_evaluated(e3_document, pe3_document, e3_pages, "no_text_layer",
                                truncated=e3_truncated or pe3_truncated)]
@@ -731,10 +778,28 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
             # standalone product on its own.  It may be presence evidence, but
             # it must not create a "missing product" finding.
             reference_only.append(component)
+        elif component.kinds and component.kinds <= {"reference", "note", "table", "unknown"}:
+            # The designation was seen only in a reference-like or note role.
+            # Its property is preserved, but it is not proof of a missing
+            # standalone product.  A bare label on the same line is a separate
+            # mention kind and therefore still makes the component eligible.
+            ambiguous.append(component)
         elif component.confidence == "low":
+            # Insufficient extraction evidence to attribute a candidate row.
+            # A bare X1 label stays a candidate for an informational row match
+            # (family_allowed is False), never for a categorical conclusion.
             ambiguous.append(component)
         else:
             missing.append(component)
+
+    # Presence in the PE3 text layer is evidence that the row extraction, not
+    # the document, is uncertain.  Never turn this into a "missing product".
+    text_present = [component for component in missing
+                    if component.designation in text_evidence]
+    if text_present:
+        text_present_designations = {component.designation for component in text_present}
+        missing = [component for component in missing
+                   if component.designation not in text_present_designations]
 
     relevant_ambiguous = [
         component for component in ambiguous
@@ -746,8 +811,14 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
         if family_of(component.designation) not in TERMINAL_FAMILIES
         and family_of(component.designation) in rows_by_family
     ]
-    context_ambiguous = relevant_reference + relevant_ambiguous
+    context_ambiguous = relevant_reference + relevant_ambiguous + text_present
     if not missing:
+        if text_present:
+            return [_not_evaluated(
+                e3_document, pe3_document, e3_pages, "present_in_unparsed_pe3_text",
+                ambiguous=context_ambiguous, partial=partial, truncated=truncated,
+                ambiguous_reason="present_in_unparsed_pe3_text",
+            )]
         if context_ambiguous:
             return [_not_evaluated(e3_document, pe3_document, e3_pages, "reference_only",
                                    ambiguous=context_ambiguous, partial=partial, truncated=truncated)]
@@ -794,7 +865,12 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
         base["type_name"] = TYPE_NAMES.get(family, f"тип обозначения {family}" if family else "")
         if context_ambiguous:
             base["ambiguous"] = [
-                _ambiguous_item(component) for component in context_ambiguous[:MAX_AMBIGUOUS]
+                _ambiguous_item(
+                    component,
+                    "present_in_unparsed_pe3_text"
+                    if component.designation in text_evidence else None,
+                )
+                for component in context_ambiguous[:MAX_AMBIGUOUS]
             ]
         details = _details_for_group(base, row, group, reason, confidence)
 

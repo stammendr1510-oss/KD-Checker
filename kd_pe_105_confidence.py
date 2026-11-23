@@ -51,6 +51,7 @@ DECISION_NOT_EVALUATED = "not_evaluated"
 #: Reasons that must always be reported as ``not_evaluated``.
 REASONS_REQUIRING_NOT_EVALUATED = frozenset({
     "reference_only", "no_text_layer", "pe3_not_parsed", "truncated",
+    "present_in_unparsed_pe3_text",
 })
 
 #: Human-readable names of the evidence factors.  Used in messages only.
