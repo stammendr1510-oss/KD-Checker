@@ -39,13 +39,13 @@ def test_offline_smoke_upload_history_decision_comparison_and_exports(tmp_path, 
         assert first_response.status_code == 200
         first = first_response.json()
         assert first["checklist"]["status"] == "not_configured"
-        assert [item["code"] for item in first["issues"]] == ["KD-SET-201"]
+        assert [item["code"] for item in first["issues"]] == ["KD-SET-201", "KD-EM-000"]
         first_id = first["id"]
         history = client.get(f"/api/runs/{first_id}")
         assert history.status_code == 200
         saved = history.json()
-        assert [issue["code"] for issue in saved["issues"]] == ["KD-SET-201"]
-        assert len(saved["finding_states"]) == 1
+        assert [issue["code"] for issue in saved["issues"]] == ["KD-SET-201", "KD-EM-000"]
+        assert len(saved["finding_states"]) == 2
         state = saved["finding_states"][0]
         updated = client.patch(
             f"/api/runs/{first_id}/findings/{state['id']}",
@@ -66,7 +66,7 @@ def test_offline_smoke_upload_history_decision_comparison_and_exports(tmp_path, 
         ][0]["status"] == "new"
         comparison = client.get(f"/api/runs/{second_id}/compare/{first_id}")
         assert comparison.status_code == 200
-        assert comparison.json()["summary"]["persisting"] == 1
+        assert comparison.json()["summary"]["persisting"] == 2
         assert "finding_states" not in comparison.json()
 
         csv = client.get(f"/api/runs/{first_id}/csv")

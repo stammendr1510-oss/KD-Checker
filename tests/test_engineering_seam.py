@@ -75,4 +75,11 @@ def test_check_documents_failure_never_breaks_pipeline(monkeypatch, synthetic_cl
         raise RuntimeError('extraction failure')
     monkeypatch.setattr(adapters, 'build_model', boom)
     issues = secure_backend.check_documents(_sources(), dict(CFG))
-    assert issues and not any(i['code'].startswith('KD-EM-') for i in issues)
+    # The pipeline must survive (legacy findings still produced) and the
+    # failure must be surfaced as a structured KD-EM-000 diagnostic, not
+    # silently swallowed.
+    assert issues and any(i['code'] == 'KD-PE-000' for i in issues)
+    diagnostics = [i for i in issues if i['code'] == 'KD-EM-000']
+    assert len(diagnostics) == 1 and diagnostics[0]['severity'] == 'error'
+    assert 'построение инженерной модели' in diagnostics[0]['location']
+    assert 'RuntimeError' in diagnostics[0]['message']
