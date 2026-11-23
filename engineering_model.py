@@ -180,3 +180,95 @@ def run_verifiers(model: EngineeringModel) -> list[dict]:
     return (verify_row_quantities(model)
             + verify_document_refs(model)
             + verify_ambiguous_identities(model))
+
+
+# --- KD-PE-109 universal rule pack -------------------------------------------
+
+CODE_CONFLICT = 'KD-EM-109-1'
+CODE_COVERAGE = 'KD-EM-109-2'
+CODE_CONTACT = 'KD-EM-109-3'
+MAX_EXAMPLES = 8
+
+
+def verify_endpoint_conflicts(model: EngineeringModel) -> list[dict]:
+    """EM-109-1: one (device, terminal) endpoint claimed by different wires."""
+    from naming import normalized as _norm
+    claims: dict = {}
+    for record in model.connections:
+        for end in (record.source, record.target):
+            key = (_norm(end.device), _norm(end.terminal))
+            claims.setdefault(key, []).append(record)
+    out = []
+    for (device, terminal), records in sorted(claims.items()):
+        wires = {r.wire for r in records}
+        if len(records) < 2 or len(wires) < 2:
+            continue
+        first = records[0]
+        places = '; '.join(sorted({f'{r.wire}: {r.document}, {r.location}' for r in records}))
+        out.append(issue('warning', CODE_CONFLICT, first.document, first.location,
+            f'Контакт «{device}:{terminal}» использован в разных проводах: {places}. '
+            'Это не подтверждённая ошибка КД; возможны отводки или повтор экспорта.',
+            'Сверьте структурированный экспорт и назначение контактов инженером'))
+    return out
+
+
+def verify_coverage(model: EngineeringModel) -> list[dict]:
+    """EM-109-2: devices mentioned in Э3 but absent from ПЭ3 rows and inverse."""
+    if not model.scheme_mentions or not model.spec_rows:
+        return []
+    scheme_devices = {m.designation.normalized for m in model.scheme_mentions}
+    spec_devices = {d.normalized for r in model.spec_rows for d in r.designations}
+    out = []
+    only_scheme = sorted(scheme_devices - spec_devices)[:MAX_EXAMPLES]
+    if only_scheme:
+        places = [f'{n} ({_first_ref(model, n).describe()})' for n in only_scheme]
+        ref = _first_ref(model, only_scheme[0])
+        out.append(issue('info', CODE_COVERAGE, ref.document, ref.describe(),
+            f'{len(scheme_devices - spec_devices)} обозначений распознано в Э3, но не подтверждено строками ПЭ3 '
+            f'(примеры: {"; ".join(places)}). Это не считается ошибкой КД.',
+            'Для проверки полноты сопоставьте исходные Э3 и ПЭ3 или структурированный экспорт проекта'))
+    only_spec = sorted(spec_devices - scheme_devices)[:MAX_EXAMPLES]
+    if only_spec:
+        places = [f'{n} ({_row_ref(model, n).describe()})' for n in only_spec]
+        ref = _row_ref(model, only_spec[0])
+        out.append(issue('info', CODE_COVERAGE, ref.document, ref.describe(),
+            f'{len(spec_devices - scheme_devices)} обозначений извлечено из ПЭ3, но не подтверждено текстом Э3 '
+            f'(примеры: {"; ".join(places)}). Это не считается ошибкой КД.',
+            'Для проверки полноты сопоставьте исходные Э3 и ПЭ3 или структурированный экспорт проекта'))
+    return out
+
+
+def verify_contact_consistency(model: EngineeringModel) -> list[dict]:
+    """EM-109-3: rows with unresolved fragments and quantity above confirmed count."""
+    out = []
+    for row in model.spec_rows:
+        if not row.unknown or row.quantity is None or row.quantity <= row.confirmed_count:
+            continue
+        ref = row.provenance
+        place = ref.describe() if ref else 'Перечень элементов'
+        fragments = ', '.join(f'«{u}»' for u in row.unknown[:MAX_EXAMPLES])
+        out.append(issue('info', CODE_CONTACT, ref.document if ref else '', place,
+            f'В записи «{row.raw_text}» количество {row.quantity} больше числа подтверждённых обозначений '
+            f'({row.confirmed_count}); нераспознанные фрагменты: {fragments}. Это не подтверждённая ошибка КД.',
+            'Проверьте исходную строку перечня вручную: переносы, диапазоны и составные позиции'))
+    return out
+
+
+def _first_ref(model: EngineeringModel, normalized_name: str) -> SourceRef:
+    for m in model.scheme_mentions:
+        if m.designation.normalized == normalized_name:
+            return m.provenance
+    return SourceRef(document='')
+
+
+def _row_ref(model: EngineeringModel, normalized_name: str) -> SourceRef:
+    for r in model.spec_rows:
+        if any(d.normalized == normalized_name for d in r.designations):
+            return r.provenance or SourceRef(document='')
+    return SourceRef(document='')
+
+
+def run_universal_verifiers(model: EngineeringModel) -> list[dict]:
+    return (verify_endpoint_conflicts(model)
+            + verify_coverage(model)
+            + verify_contact_consistency(model))

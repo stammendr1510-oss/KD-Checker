@@ -19,6 +19,7 @@ from issue_tracking import MAX_COMMENT, validate_decision
 from excel_reports import build_excel_report
 from set_completeness import unpaired_document_findings
 from full_set_completeness import full_set_findings
+from adapters import apply_engineering_findings
 from document_identity import pdf_identity_findings, unique_pdf_analysis_sources
 from pair_analysis import pair_analysis_plan
 from run_comparison import compare_runs, IncompatibleRuns
@@ -129,6 +130,7 @@ async def check(files: list[UploadFile] = File(...)):
     issues.extend(pair_findings)
     for scheme, spec in pairs:
         issues.extend(crosscheck(scheme[0], scheme[3], spec[0], spec[3]))
+    issues = apply_engineering_findings(issues, pdf_sources, load_cfg())
     for err in errors:
         issues.append({"severity":"error", "code":"KD-000", "file":err["file"], "location":"Загрузка", "message":err["message"], "recommendation":"Предоставьте корректный файл поддерживаемого формата"})
     # Every new check independently retrieves the current checklist when configured.
@@ -256,6 +258,5 @@ def export_excel(run_id: int):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8765)
-
 
 
