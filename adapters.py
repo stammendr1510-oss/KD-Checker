@@ -7,16 +7,32 @@ from __future__ import annotations
 from full_set_completeness import classify_pdf_name
 from engineering_model import (
     Designation, DocumentRef, EngineeringModel, SchemeMention, SourceRef, SpecRow,
+    extract_attributes,
     run_universal_verifiers, run_verifiers,
 )
 from engineering_graph import run_graph_verifiers
 from full_set_completeness import specification_references
 from kd_crosscheck import get_spec_rows, scheme_designations
+from confusable_designations import model_tokens
 import fitz
 
 
 def source_ref(document: str, page=None, row=None, bounds=None) -> SourceRef:
     return SourceRef(document=document, page=page, row=row, bounds=bounds)
+
+
+def _em000(stage: str, filename: str, exc: BaseException) -> dict:
+    """Structured adapter diagnostic: never silently swallow a failure."""
+    from engine import issue as _issue
+    detail = f'{type(exc).__name__}'
+    return _issue(
+        'error', 'KD-EM-000', filename or '(документ)', stage,
+        f'Этап инженерного анализа «{stage}» завершился с ошибкой ({detail}); '
+        'замечания этого документа по правилам KD-EM могут быть неполными. '
+        'Это диагностика инструмента, а не ошибка КД.',
+        'Повторите проверку после устранения сбоя; при повторении сохраните файл '
+        'и передайте его разработчикам инструмента.',
+    )
 
 
 def model_from_spec_rows(rows, filename: str, model: EngineeringModel | None = None) -> EngineeringModel:
@@ -25,12 +41,16 @@ def model_from_spec_rows(rows, filename: str, model: EngineeringModel | None = N
     for r in rows:
         ref = source_ref(filename, page=r.get('page'), row=r.get('table_row'), bounds=r.get('row_band'))
         des = [Designation.classify(d) for d in sorted(r.get('entries', set()))]
+        name = str(r.get('name') or '')
         row = SpecRow(raw_text=r.get('source', ''), quantity=r.get('quantity'),
                       designations=des, unknown=list(r.get('unknown', [])),
-                      provenance=ref)
+                      provenance=ref, name=name,
+                      attributes=extract_attributes(name))
         model.spec_rows.append(row)
         for d in des:
             model.add_device(d, ref)
+        for token in model_tokens(name):
+            model.pe3_model_tokens.setdefault(token, set()).add(ref)
     return model
 
 
@@ -44,6 +64,8 @@ def model_from_scheme(pdf_bytes: bytes, filename: str, model: EngineeringModel |
                 des = Designation.classify(raw)
                 model.scheme_mentions.append(SchemeMention(designation=des, provenance=ref))
                 model.add_device(des, ref)
+            for token in model_tokens(page.get_text()):
+                model.e3_model_tokens.setdefault(token, set()).add(ref)
     return model
 
 
@@ -76,29 +98,47 @@ def build_model(pdf_sources, names=None) -> EngineeringModel:
 
     pdf_sources: list of (filename, pdf_bytes); names defaults to the source
     names. Only PDF kinds already recognized by existing extractors are used.
+    Adapter failures are surfaced as KD-EM-000 diagnostics, never swallowed.
     """
     model = EngineeringModel()
+    diagnostics = []
     names = names if names is not None else [n for n, _ in pdf_sources]
     attach_upload_identities(names, model)
+    parsed_counts = {}
     for name, content in pdf_sources:
         identity = classify_pdf_name(name)
         if identity is None:
             continue
-        if identity.kind == 'ПЭ3':
-            try:
+        try:
+            if identity.kind == 'ПЭ3':
+                before = len(model.spec_rows)
                 model_from_spec_rows(get_spec_rows(content), name, model)
-            except (RuntimeError, ValueError):
-                pass
-        elif identity.kind == 'Э3':
-            try:
+                parsed_counts[name] = len(model.spec_rows) - before
+            elif identity.kind == 'Э3':
+                before = len(model.scheme_mentions)
                 model_from_scheme(content, name, model)
-            except (RuntimeError, ValueError):
-                pass
-        elif identity.kind == 'СП':
-            try:
+                parsed_counts[name] = len(model.scheme_mentions) - before
+            elif identity.kind == 'СП':
+                before = len(model.document_refs)
                 model_from_sp_references(content, name, model)
-            except (RuntimeError, ValueError):
-                pass
+                parsed_counts[name] = len(model.document_refs) - before
+        except Exception as exc:  # noqa: BLE001 - must surface, never swallow
+            diagnostics.append(_em000(f'извлечение {identity.kind}', name, exc))
+            parsed_counts[name] = 0
+    # Extraction-gap diagnostics: a recognized engineering document that
+    # produced zero model entities means the analysis is incomplete.
+    for name, count in parsed_counts.items():
+        if count == 0:
+            from engine import issue as _issue
+            diagnostics.append(_issue(
+                'info', 'KD-EM-000', name, 'Извлечение',
+                'Документ распознан, но из него не извлечено ни одной сущности '
+                '(строк, обозначений или ссылок); замечания KD-EM по этому '
+                'документу неполные. Это ограничение инструмента, а не ошибка КД.',
+                'Проверьте, что PDF содержит текстовый слой и таблицы в '
+                'стандартной форме; при необходимости используйте структурированную выгрузку.',
+            ))
+    model.adapter_diagnostics = diagnostics
     return model
 
 
@@ -133,20 +173,31 @@ def engineering_flags(cfg=None) -> dict:
     return flags
 
 
+def _name_content_pairs(pdf_sources) -> list:
+    """Accept both (name, kind, pair_key, bytes) and (name, bytes) sources."""
+    pairs = []
+    for item in pdf_sources:
+        pairs.append((item[0], item[-1]))
+    return pairs
+
+
 def engineering_findings(pdf_sources, cfg=None) -> list:
     """Build the model from uploaded PDFs and run EM-108/EM-109/EM-110 verifiers.
 
-    pdf_sources: (name, kind, pair_key, bytes) as produced by /api/check.
-    Never raises: any failure yields no findings.
+    pdf_sources: (name, kind, pair_key, bytes) or (name, bytes). ALL uploaded
+    PDFs must be passed — including СП and ВО — otherwise document-reference
+    checks have no model to verify against.
+    Never raises: any failure yields a KD-EM-000 diagnostic.
     """
     if not engineering_flags(cfg)['engineering_model_checks']:
         return []
     try:
-        model = build_model([(name, content) for name, _, _, content in pdf_sources])
-        return (list(run_verifiers(model)) + list(run_universal_verifiers(model))
+        model = build_model(_name_content_pairs(pdf_sources))
+        return (list(getattr(model, 'adapter_diagnostics', []))
+                + list(run_verifiers(model)) + list(run_universal_verifiers(model))
                 + list(run_graph_verifiers(model)))
-    except Exception:
-        return []
+    except Exception as exc:  # noqa: BLE001 - the seam must fail loudly, not silently
+        return [_em000('построение инженерной модели', '', exc)]
 
 
 def apply_engineering_findings(issues, pdf_sources, cfg) -> list:

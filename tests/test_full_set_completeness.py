@@ -160,8 +160,8 @@ def test_api_history_excel_csv_and_decisions(tmp_path, monkeypatch):
         response=client.post('/api/check',files=files)
         assert response.status_code==200
         body=response.json()
-        assert [f['code'] for f in body['issues']]==['KD-SET-201','KD-SET-203']
-        assert body['summary']==dict(error=0,warning=0,info=2)
+        assert [f['code'] for f in body['issues']]==['KD-SET-201','KD-SET-203','KD-EM-108-2']
+        assert body['summary']==dict(error=0,warning=1,info=2)
         run_id=body['id'];record=client.get(f'/api/runs/{run_id}').json()
         state=record['finding_states'][1]
         assert client.patch(f'/api/runs/{run_id}/findings/{state["id"]}',json=dict(status='in_progress',comment='=1+1',expected_version=0)).status_code==200
