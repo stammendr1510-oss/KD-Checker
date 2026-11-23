@@ -9,6 +9,7 @@ from engineering_model import (
     Designation, DocumentRef, EngineeringModel, SchemeMention, SourceRef, SpecRow,
     run_universal_verifiers, run_verifiers,
 )
+from engineering_graph import run_graph_verifiers
 from full_set_completeness import specification_references
 from kd_crosscheck import get_spec_rows, scheme_designations
 import fitz
@@ -133,7 +134,7 @@ def engineering_flags(cfg=None) -> dict:
 
 
 def engineering_findings(pdf_sources, cfg=None) -> list:
-    """Build the model from uploaded PDFs and run EM-108/EM-109 verifiers.
+    """Build the model from uploaded PDFs and run EM-108/EM-109/EM-110 verifiers.
 
     pdf_sources: (name, kind, pair_key, bytes) as produced by /api/check.
     Never raises: any failure yields no findings.
@@ -142,7 +143,8 @@ def engineering_findings(pdf_sources, cfg=None) -> list:
         return []
     try:
         model = build_model([(name, content) for name, _, _, content in pdf_sources])
-        return list(run_verifiers(model)) + list(run_universal_verifiers(model))
+        return (list(run_verifiers(model)) + list(run_universal_verifiers(model))
+                + list(run_graph_verifiers(model)))
     except Exception:
         return []
 
