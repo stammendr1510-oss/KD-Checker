@@ -33,7 +33,7 @@ TRUNCATION_MARK = '…'
 
 TAG = reference_tag()
 
-# KD-PE-113: bulk/length unit signatures for legacy quantity-warning gating.
+# Semantic row model: bulk/length unit signatures for quantity-warning gating.
 # Shared with engineering_model.SpecRow (kept in sync by tests); a local copy
 # avoids an import cycle.
 _LENGTH_OR_BULK_UNITS_RE = re.compile(
@@ -347,21 +347,23 @@ def get_spec_rows(pdf_bytes, *, include_evidence=False):
                 for t in des:
                     lines[(t[5], t[6])].append(t)
                 ordered = sorted(lines.values(), key=lambda line: (min(t[1] for t in line), min(t[0] for t in line)))
-                # Physical line breaks inside one cell are formatting. Keep a
-                # whitespace boundary in the source text; notation below still
-                # retains line structure for conservative ambiguity handling.
-                raw = ' '.join(' '.join(t[4] for t in sorted(line, key=lambda t: t[0])) for line in ordered)
+                # Preserve physical line boundaries until cell geometry and
+                # complete notation establish that flattening is safe.
                 # Word gaps also matter: XT1 and 2 must not silently become XT12.
                 notation = '\n'.join(' '.join(t[4] for t in sorted(line, key=lambda t: t[0])) for line in ordered)
+                raw = notation
                 entries, unknown = expand_notation(notation)
-                if unknown:
-                    raw = re.sub(r'\s+', ' ', notation).strip()
                 if entries:
                     band = _row_band(qty, index, rules)
                     bounds = _duplicate_column_bounds(page, band) if not unknown else None
                     contained = bool(bounds and all(bounds[0] - .5 <= t[0] and t[2] <= bounds[1] + .5 for t in des))
                     complete = bool(bounds and all(t in des for t in words
                         if bounds[0] <= t[0] < bounds[1] and band[0] < (t[1] + t[3]) / 2 < band[1]))
+                    # A verified cell can display wrapped, fully parsed values
+                    # on one line. Otherwise preserve physical line breaks as
+                    # source evidence, especially for ambiguous fragments.
+                    if contained and complete and not unknown:
+                        raw = ' '.join(notation.split())
                     name = ''
                     name_confidence = 'low'
                     if band:
@@ -623,14 +625,14 @@ def run(e3_filename, e3_bytes, pe_filename, pe_bytes, *, include_evidence=False)
     # No blanket "missing" reporting: drawings may contain auxiliary devices,
     # split representations and OCR/text-order artifacts.
     for r in rows:
-        # KD-PE-113: only rows whose quantity counts whole devices are
+        # Semantic row model: only rows whose quantity counts whole devices are
         # eligible. Accessory/sub-part, bulk/length and ambiguous rows carry
         # different quantity semantics; their apparent mismatch is reported
         # by the semantic model (KD-EM-109-3), not by the legacy warning.
         _name = str(r.get('name') or '')
         _bulk = bool(_LENGTH_OR_BULK_UNITS_RE.search(_name))
         _role_ok = (not r['unknown'] and len(r['entries']) > 1
-                    and not _bulk and r.get('row_band') is not None)
+                    and not _bulk)
         if not r['unknown'] and len(r['entries']) > 1 and len(r['entries']) != r['quantity'] and _role_ok:
             # The row number is evidence only when backed by PDF grid lines.
             # Unframed extraction retains page-only location without guessing.

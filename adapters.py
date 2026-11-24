@@ -479,18 +479,19 @@ def _model_summary(model, sources):
     }
 
 
-def engineering_analysis(sources, cfg=None):
+def engineering_analysis(sources, cfg=None, *, uploaded_names=None):
     if not engineering_flags(cfg)['engineering_model_checks']:
         empty = EngineeringModel()
         return [], _model_summary(empty, sources)
-    model = build_model(sources)
+    model = (build_model(sources) if uploaded_names is None
+             else build_model(sources, names=uploaded_names))
     findings = (list(getattr(model, 'adapter_diagnostics', []))
                 + list(run_verifiers(model)) + list(run_universal_verifiers(model))
                 + list(run_graph_verifiers(model)))
     return findings, _model_summary(model, sources)
 
 
-def apply_engineering_findings(issues, pdf_sources, cfg, *, return_summary=False):
+def apply_engineering_findings(issues, pdf_sources, cfg, *, return_summary=False, uploaded_names=None):
     """Append KD-EM-* findings to an existing issue list (pure function).
 
     Strictly additive by default. Only when the explicit opt-in
@@ -498,7 +499,7 @@ def apply_engineering_findings(issues, pdf_sources, cfg, *, return_summary=False
     KD-PE-102 / KD-SET-203 removed from the existing list first.
     """
     try:
-        findings, summary = engineering_analysis(pdf_sources, cfg)
+        findings, summary = engineering_analysis(pdf_sources, cfg, uploaded_names=uploaded_names)
     except Exception as exc:  # noqa: BLE001
         findings = [_em000('построение инженерной модели', '', exc)]
         summary = _model_summary(EngineeringModel(), pdf_sources)
