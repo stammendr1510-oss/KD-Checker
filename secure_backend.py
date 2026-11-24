@@ -59,7 +59,7 @@ def check_documents(files, cfg, *, include_evidence=False):
         issues += crosscheck(scheme[0], scheme[3], spec[0], spec[3], include_evidence=include_evidence)
     # All uploaded PDFs feed the engineering model, not only the
     # designation-typed E3/PE3 pairs (СП/ВО included).
-    issues = apply_engineering_findings(issues, sources, cfg)
+    issues = apply_engineering_findings(issues, files, cfg)
     return issues
 
 

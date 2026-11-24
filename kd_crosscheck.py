@@ -346,12 +346,15 @@ def get_spec_rows(pdf_bytes, *, include_evidence=False):
                 for t in des:
                     lines[(t[5], t[6])].append(t)
                 ordered = sorted(lines.values(), key=lambda line: (min(t[1] for t in line), min(t[0] for t in line)))
-                raw = '\n'.join(''.join(t[4] for t in sorted(line, key=lambda t: t[0])) for line in ordered)
+                # Physical line breaks inside one cell are formatting. Keep a
+                # whitespace boundary in the source text; notation below still
+                # retains line structure for conservative ambiguity handling.
+                raw = ' '.join(' '.join(t[4] for t in sorted(line, key=lambda t: t[0])) for line in ordered)
                 # Word gaps also matter: XT1 and 2 must not silently become XT12.
                 notation = '\n'.join(' '.join(t[4] for t in sorted(line, key=lambda t: t[0])) for line in ordered)
                 entries, unknown = expand_notation(notation)
                 if unknown:
-                    raw = notation
+                    raw = re.sub(r'\s+', ' ', notation).strip()
                 if entries:
                     band = _row_band(qty, index, rules)
                     bounds = _duplicate_column_bounds(page, band) if not unknown else None
@@ -474,6 +477,15 @@ def scheme_designations(page):
     Standalone complete labels, different blocks, columns and pages stay separate.
     """
     yield from (m.group(0) for m in current_tag().finditer(page.get_text()))
+    # A range printed as one E3 token must contribute every member, not only
+    # the endpoints found by the tag regex. The same grammar handles compound
+    # semicolon lists without reference-class-specific rules.
+    for word in page.get_text('words', sort=True):
+        text = str(word[4])
+        if not any(mark in text for mark in (';', '..', '…', '–', '—')):
+            continue
+        expanded, _unknown = expand_notation(text)
+        yield from sorted(expanded)
     blocks = defaultdict(lambda: defaultdict(list))
     for word in page.get_text('words', sort=True):
         blocks[word[5]][word[6]].append(word)

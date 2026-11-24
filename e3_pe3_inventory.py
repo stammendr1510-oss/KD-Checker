@@ -11,7 +11,8 @@ import json
 import math
 import re
 
-from kd_crosscheck import MAX_PDF_PAGES, TAG, designation_type, normalized, pair_key
+from kd_crosscheck import MAX_PDF_PAGES, designation_type, normalized, pair_key
+from naming import current_tag, expand_notation
 from identifier_classification import (
     AMBIGUOUS,
     CONNECTION_REFERENCE,
@@ -224,9 +225,15 @@ def group_of(designation):
 def base_of(designation):
     value = normalized(designation)
     match = re.fullmatch(r"(.+)\.(\d+)", value)
-    if match and TAG.fullmatch(match.group(1)):
+    if match and current_tag().fullmatch(match.group(1)):
         return match.group(1)
     return value
+
+
+def matching_keys(designation):
+    """Return exact and parent keys without rewriting source evidence."""
+    value = normalized(designation)
+    return {value, base_of(value)}
 
 
 def parse_designation(designation):
@@ -297,7 +304,22 @@ def extract_mentions(words, page, *, page_size=None, legacy_values=()):
         for word in line:
             text = str(word[4])
             norm_text = normalized(text)
-            for match in TAG.finditer(norm_text):
+            matches = list(current_tag().finditer(norm_text))
+            expanded, _unknown = expand_notation(text, current_tag())
+            endpoints = {normalized(match.group(0)) for match in matches}
+            for designation in sorted(expanded - endpoints):
+                key = (designation, "table")
+                if key in seen:
+                    continue
+                seen.add(key)
+                found.append(Mention(
+                    designation=designation,
+                    raw=_clean(text, 100), page=page, kind="table",
+                    context=_clean(line_text, MAX_CONTEXT, mark_truncation=True),
+                    confidence=_kind_confidence("table"), bbox=None, page_size=None,
+                    line_text=_clean(line_text, MAX_CONTEXT, mark_truncation=True),
+                ))
+            for match in matches:
                 raw = text[match.start():match.end()]
                 designation = normalized(raw)
                 if not designation:
@@ -332,7 +354,7 @@ def extract_mentions(words, page, *, page_size=None, legacy_values=()):
     present = {mention.designation for mention in found}
     for value in legacy_values:
         designation = normalized(value)
-        if not designation or designation in present or not TAG.fullmatch(designation):
+        if not designation or designation in present or not current_tag().fullmatch(designation):
             continue
         found.append(Mention(
             designation=designation,
@@ -451,7 +473,7 @@ def _row_match_evidence(component, row):
     entries = row.get("entries") or set()
     if not entries:
         return MATCH_NONE
-    if designation in entries or base_of(designation) in entries:
+    if any(matching_keys(designation) & matching_keys(entry) for entry in entries):
         return MATCH_EXACT
     families = {family_of(entry) for entry in entries if family_of(entry)}
     if family_of(designation) not in families:
@@ -724,11 +746,17 @@ def _not_evaluated(e3_document, pe3_document, e3_pages, reason, *, ambiguous=(),
         "Проверка KD-PE-105 не выполнена (not_evaluated): "
         f"{REASON_LABELS.get(reason, reason)}. Отсутствие обозначений в ПЭ3 не утверждается."
     )
-    recommendation = (
-        "Выполните OCR или предоставьте PDF с текстовым слоем, затем повторите проверку. "
-        "При неоднозначных ссылках проверьте схему и перечень вручную. "
-        "Это не подтверждённая ошибка КД."
-    )
+    if reason == "no_text_layer":
+        recommendation = (
+            "Выполните OCR или предоставьте PDF с текстовым слоем, затем повторите проверку. "
+            "Это не подтверждённая ошибка КД."
+        )
+    else:
+        recommendation = (
+            "Текстовый слой доступен. Проверьте структуру таблицы: заголовки столбцов, "
+            "границы строк, ячейки обозначений и якоря количества; при неоднозначности "
+            "сверьте перечень вручную. Это не подтверждённая ошибка КД."
+        )
     return _finding("info", pe3_document, "Сопоставление Э3 ↔ ПЭ3", message, recommendation, details)
 
 
@@ -783,7 +811,7 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
     missing, ambiguous, reference_only, matched = [], [], [], []
     for designation in sorted(components):
         component = components[designation]
-        if designation in pe3_entries or base_of(designation) in pe3_entries:
+        if any(matching_keys(designation) & matching_keys(entry) for entry in pe3_entries):
             matched.append(component)
         elif component.category in (TERMINAL_OR_PIN, CONNECTION_REFERENCE, CROSS_REFERENCE):
             # A pin, connection address or cross-reference is never a
@@ -807,7 +835,8 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
     # Presence in the PE3 text layer is evidence that the row extraction, not
     # the document, is uncertain.  Never turn this into a "missing product".
     text_present = [component for component in missing
-                    if component.designation in text_evidence]
+                    if any(matching_keys(component.designation) & matching_keys(entry)
+                           for entry in text_evidence)]
     if text_present:
         text_present_designations = {component.designation for component in text_present}
         missing = [component for component in missing

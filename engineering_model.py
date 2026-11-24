@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from connection_checks import Connection
 from engine import issue
-from naming import CYR_LOOKALIKES
+from naming import CYR_LOOKALIKES, current_tag, normalized
 
 
 # --- Universal product-attribute signatures (KD-PE-112) ----------------------
@@ -317,21 +317,33 @@ def verify_coverage(model: EngineeringModel) -> list[dict]:
                     for d in r.designations
                     if r.row_role not in ('accessory', 'assembly_element')
                     and r.quantity_semantics != 'length_or_bulk'}
+    def keys(value):
+        value = normalized(value)
+        match = re.fullmatch(r'(.+)\.(\d+)', value)
+        parent = match.group(1) if match and current_tag().fullmatch(match.group(1)) else value
+        return {value, parent}
+
+    matched_scheme = {value for value in scheme_devices
+                      if any(keys(value) & keys(other) for other in spec_devices)}
+    matched_spec = {value for value in spec_devices
+                    if any(keys(value) & keys(other) for other in scheme_devices)}
     out = []
-    only_scheme = sorted(scheme_devices - spec_devices)[:MAX_EXAMPLES]
+    only_scheme_all = scheme_devices - matched_scheme
+    only_scheme = sorted(only_scheme_all)[:MAX_EXAMPLES]
     if only_scheme:
         places = [f'{n} ({_first_ref(model, n).describe()})' for n in only_scheme]
         ref = _first_ref(model, only_scheme[0])
         out.append(issue('info', CODE_COVERAGE, ref.document, ref.describe(),
-            f'{len(scheme_devices - spec_devices)} обозначений распознано в Э3, но не подтверждено строками ПЭ3 '
+            f'{len(only_scheme_all)} обозначений распознано в Э3, но не подтверждено строками ПЭ3 '
             f'(примеры: {"; ".join(places)}). Это не считается ошибкой КД.',
             'Для проверки полноты сопоставьте исходные Э3 и ПЭ3 или структурированный экспорт проекта'))
-    only_spec = sorted(spec_devices - scheme_devices)[:MAX_EXAMPLES]
+    only_spec_all = spec_devices - matched_spec
+    only_spec = sorted(only_spec_all)[:MAX_EXAMPLES]
     if only_spec:
         places = [f'{n} ({_row_ref(model, n).describe()})' for n in only_spec]
         ref = _row_ref(model, only_spec[0])
         out.append(issue('info', CODE_COVERAGE, ref.document, ref.describe(),
-            f'{len(spec_devices - scheme_devices)} обозначений извлечено из ПЭ3, но не подтверждено текстом Э3 '
+            f'{len(only_spec_all)} обозначений извлечено из ПЭ3, но не подтверждено текстом Э3 '
             f'(примеры: {"; ".join(places)}). Это не считается ошибкой КД.',
             'Для проверки полноты сопоставьте исходные Э3 и ПЭ3 или структурированный экспорт проекта'))
     return out
