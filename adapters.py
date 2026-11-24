@@ -35,22 +35,102 @@ def _em000(stage: str, filename: str, exc: BaseException) -> dict:
     )
 
 
+# --- KD-PE-113 universal PE3 row semantic classifier --------------------------
+#
+# Multi-factor classification: table geometry (row band), notation structure
+# (expanded entries, ranges, unknown fragments), adjacent-row parent context
+# (indented sub-row / empty designator cell after a parent device row), and
+# item description/units. No factor alone decides; a blank designator cell
+# without description cues and parent adjacency is never enough.
+
+
+def _shared_parent(des: list, candidates: list[str]) -> str | None:
+    """A parent is a preceding row designator sharing the alpha stem."""
+    if not des:
+        return None
+    from naming import normalized as _norm
+    stems = {''.join(c for c in d.normalized if c.isalpha()) for d in des}
+    for cand in reversed(candidates):
+        stem = ''.join(c for c in _norm(cand) if c.isalpha())
+        if stem and any(s and (s.startswith(stem) or stem.startswith(s)) for s in stems):
+            return _norm(cand)
+    return None
+
+
+def _classify_spec_row(r: dict, prev_designations: list[str], prev_has_band: bool) -> dict:
+    """Return the KD-PE-113 semantic descriptor fields for one raw PE3 row."""
+    entries = set(r.get('entries', set()) or set())
+    unknown = list(r.get('unknown', []) or [])
+    qty = r.get('quantity')
+    band = r.get('row_band') is not None
+    name = str(r.get('name') or '')
+    indented = bool(r.get('designator_indented'))
+    has_designator = bool(entries) or bool(str(r.get('source') or '').strip())
+
+    has_length = bool(SpecRow('', None, [], name=name).has_length_or_bulk_units)
+    has_acc_cues = bool(SpecRow('', None, [], name=name).has_accessory_cues)
+
+    des_objs = [Designation.classify(d) for d in sorted(entries)]
+    parent_ref = _shared_parent(des_objs, prev_designations)
+    if parent_ref is None and not des_objs and prev_designations and prev_has_band:
+        # A designator-less child row belongs to the immediately preceding
+        # confirmed parent device row.
+        from naming import normalized as _norm
+        parent_ref = _norm(prev_designations[-1])
+
+    if unknown and not band:
+        role, sem, conf = 'ambiguous', 'device_count', 'ambiguous'
+    elif not des_objs and prev_has_band and (has_acc_cues or indented):
+        # Child accessory/sub-part row: empty designator cell (or indented
+        # sub-row) immediately after a grid-confirmed parent device row, with
+        # part/kit description cues. Blank cell alone is never sufficient.
+        role, sem, conf = 'accessory', 'accessory_qty', 'confirmed'
+    elif has_length and qty is not None and not band:
+        role, sem, conf = 'assembly_element', 'length_or_bulk', 'ambiguous'
+    elif parent_ref and indented:
+        role, sem, conf = 'assembly_element', 'assembly_units', 'confirmed'
+    elif band and des_objs and parent_ref and indented:
+        # Indented sub-row with its own designator under a parent device:
+        # assembly units, not standalone devices.
+        role, sem, conf = 'assembly_element', 'assembly_units', 'confirmed'
+    elif len(entries) > 1:
+        role = 'grouped_position'
+        sem = 'grouped_instances'
+        conf = 'confirmed' if band and not unknown else 'ambiguous'
+    elif band and not has_length and not has_acc_cues:
+        # Standalone device row confirmed by grid geometry. qty > 1 stays a
+        # genuine device-count mismatch (KD-EM-108-1 must still fire).
+        role, sem = 'standalone_device', 'device_count'
+        conf = 'confirmed' if not unknown else 'ambiguous'
+    elif has_length:
+        role, sem, conf = 'assembly_element', 'length_or_bulk', 'ambiguous'
+    else:
+        role, sem, conf = 'ambiguous', 'device_count', 'ambiguous'
+    return {'row_role': role, 'parent_ref': parent_ref,
+            'quantity_semantics': sem, 'classification_confidence': conf}
+
+
 def model_from_spec_rows(rows, filename: str, model: EngineeringModel | None = None) -> EngineeringModel:
     """Map kd_crosscheck.get_spec_rows() output into SpecRow entities."""
     model = model or EngineeringModel()
+    prev_designations: list[str] = []
+    prev_has_band = False
     for r in rows:
         ref = source_ref(filename, page=r.get('page'), row=r.get('table_row'), bounds=r.get('row_band'))
         des = [Designation.classify(d) for d in sorted(r.get('entries', set()))]
         name = str(r.get('name') or '')
+        semantic = _classify_spec_row(r, prev_designations, prev_has_band)
         row = SpecRow(raw_text=r.get('source', ''), quantity=r.get('quantity'),
                       designations=des, unknown=list(r.get('unknown', [])),
                       provenance=ref, name=name,
-                      attributes=extract_attributes(name))
+                      attributes=extract_attributes(name), **semantic)
         model.spec_rows.append(row)
         for d in des:
             model.add_device(d, ref)
         for token in model_tokens(name):
             model.pe3_model_tokens.setdefault(token, set()).add(ref)
+        prev_designations = [d.raw for d in des] or prev_designations
+        prev_has_band = r.get('row_band') is not None
     return model
 
 

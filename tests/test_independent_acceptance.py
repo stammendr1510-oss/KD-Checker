@@ -273,7 +273,33 @@ def test_fully_empty_model_is_silent(holdout_classes):
 
 PROJECT = 'ГХ.7710.7701'
 SPACES = ' ' * 62  # mono 10pt: digit lands at x≈433, inside the qty column
-FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf'  # Cyrillic-capable
+
+
+def _cyrillic_font() -> str:
+    """Cross-platform Cyrillic-capable mono font path (KD-PE-113).
+
+    Windows 11 first, then common Linux locations, then a PyMuPDF built-in
+    fallback. Skips the test only when no Cyrillic-capable font exists.
+    """
+    from pathlib import Path
+    candidates = [
+        r'C:\Windows\Fonts\consola.ttf',
+        r'C:\Windows\Fonts\cour.ttf',
+        r'C:\Windows\Fonts\arial.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf',
+        '/usr/share/fonts/dejavu/DejaVuSansMono.ttf',
+        '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf',
+    ]
+    for candidate in candidates:
+        if Path(candidate).exists():
+            return candidate
+    for directory in ('/usr/share/fonts', '/usr/local/share/fonts'):
+        root = Path(directory)
+        if root.is_dir():
+            for path in sorted(root.rglob('*.ttf')):
+                if 'mono' in path.name.lower() or 'cour' in path.name.lower():
+                    return str(path)
+    pytest.skip('нет доступного шрифта с поддержкой кириллицы')
 
 
 def _pdf(build):
@@ -291,25 +317,25 @@ def _pe3_pdf(row_specs):
     """Minimal grid-confirmed ПЭ3: designator column [0.09W,0.188W), 'кол'
     header near 0.75W, horizontal rules crossing the designator column."""
     def build(page):
-        page.insert_text((435, 70), 'кол', fontname='DVSM', fontfile=FONT, fontsize=10)
+        page.insert_text((435, 70), 'кол', fontname='DVSM', fontfile=_cyrillic_font(), fontsize=10)
         y = 200
         for designation, qty in row_specs:
             page.draw_line((50, y), (120, y))
             page.draw_line((50, y + 30), (120, y + 30))
             page.insert_text((60, y + 13), f'{designation}\n{SPACES}{qty}',
-                             fontname='DVSM', fontfile=FONT, fontsize=10)
+                             fontname='DVSM', fontfile=_cyrillic_font(), fontsize=10)
             y += 60
     return _pdf(build)
 
 
 def _sp_pdf(reference_text):
     def build(page):
-        page.insert_text((200, 100), 'обозначение', fontname='DVSM', fontfile=FONT, fontsize=10)
+        page.insert_text((200, 100), 'обозначение', fontname='DVSM', fontfile=_cyrillic_font(), fontsize=10)
         page.draw_line((150, 80), (150, 200))
         page.draw_line((450, 80), (450, 200))
         for y in (110, 150, 190):
             page.draw_line((100, y), (500, y))
-        page.insert_text((200, 135), reference_text, fontname='DVSM', fontfile=FONT, fontsize=10)
+        page.insert_text((200, 135), reference_text, fontname='DVSM', fontfile=_cyrillic_font(), fontsize=10)
     return _pdf(build)
 
 

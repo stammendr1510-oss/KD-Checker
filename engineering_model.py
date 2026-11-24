@@ -108,6 +108,26 @@ class SchemeMention:
 
 # --- PE3 / SP rows ----------------------------------------------------------
 
+# --- PE3 row semantic descriptor (KD-PE-113) ---------------------------------
+#
+# Universal classification: table geometry (row band), notation structure
+# (entries/ranges/unknown fragments), adjacent-row parent context, and
+# item description/units are combined. No rule is keyed on a concrete
+# device code, filename or sheet number.
+
+ROW_ROLES = ('standalone_device', 'accessory', 'assembly_element',
+             'grouped_position', 'ambiguous')
+QUANTITY_SEMANTICS = ('device_count', 'accessory_qty', 'assembly_units',
+                      'grouped_instances', 'length_or_bulk')
+
+_LENGTH_UNITS_RE = re.compile(
+    r'(?<![\w])(?:м|мм|мм²|м2|см|км|кг|г|м2/м|пог\.?\s*м|м\.)(?![\w])', re.I)
+# Part/accessory cues in a product name (assembled sets, mounting parts).
+_ACCESSORY_CUES_RE = re.compile(
+    r'(?:комплект|набор|принадлежн|аксессуар|детал|креплен|зажим|планка|'
+    r'перемычк|адаптер|гребенк|держател|уплотн|винт|гаек|шайб)', re.I)
+
+
 @dataclass
 class SpecRow:
     raw_text: str
@@ -117,10 +137,26 @@ class SpecRow:
     provenance: SourceRef | None = None
     name: str = ""
     attributes: dict = field(default_factory=dict)  # extract_attributes() output
+    # KD-PE-113 semantic descriptor (set by adapters._classify_spec_row).
+    # Defaults describe a plain device row constructed without table context;
+    # the adapter refines them from grid geometry, notation structure,
+    # parent context and description cues.
+    row_role: str = 'standalone_device'
+    parent_ref: str | None = None
+    quantity_semantics: str = 'device_count'
+    classification_confidence: str = 'ambiguous'
 
     @property
     def confirmed_count(self) -> int:
         return len(self.designations)
+
+    @property
+    def has_length_or_bulk_units(self) -> bool:
+        return bool(_LENGTH_UNITS_RE.search(self.name or ''))
+
+    @property
+    def has_accessory_cues(self) -> bool:
+        return bool(_ACCESSORY_CUES_RE.search(self.name or ''))
 
 
 @dataclass
@@ -167,12 +203,27 @@ CODE_QTY = 'KD-EM-108-1'
 CODE_REF = 'KD-EM-108-2'
 CODE_AMB = 'KD-EM-108-3'
 
+# KD-PE-113: rows whose quantity is not a per-designation device count must
+# not produce KD-EM-108-1 quantity-mismatch findings. They are surfaced via
+# KD-EM-109-3 (unresolved fragments) instead, or accepted as bulk rows.
+_QTY_CHECK_ROLES = frozenset({'standalone_device', 'grouped_position'})
+_QTY_CHECK_SEMANTICS = frozenset({'device_count', 'grouped_instances'})
+
 
 def verify_row_quantities(model: EngineeringModel) -> list[dict]:
-    """EM-108-1: PE3 row quantity differs from expanded designation count."""
+    """EM-108-1: PE3 row quantity differs from expanded designation count.
+
+    Only rows confirmed to count whole devices are checked. Accessory,
+    assembly-element, bulk/length and ambiguous rows carry a different
+    quantity semantics; their apparent mismatches are not device-count
+    errors (see KD-EM-109-3 for unresolved fragments).
+    """
     out = []
     for row in model.spec_rows:
         if row.quantity is None or row.quantity == row.confirmed_count:
+            continue
+        if (row.row_role not in _QTY_CHECK_ROLES
+                or row.quantity_semantics not in _QTY_CHECK_SEMANTICS):
             continue
         place = row.provenance.describe() if row.provenance else 'Перечень элементов'
         out.append(issue('warning', CODE_QTY, row.provenance.document if row.provenance else '',
@@ -259,7 +310,13 @@ def verify_coverage(model: EngineeringModel) -> list[dict]:
     if not model.scheme_mentions or not model.spec_rows:
         return []
     scheme_devices = {m.designation.normalized for m in model.scheme_mentions}
-    spec_devices = {d.normalized for r in model.spec_rows for d in r.designations}
+    # KD-PE-113: accessory/sub-part and bulk/length rows list materials under
+    # a parent device, not scheme devices of their own. Their designations
+    # must not create "present in ПЭ3, absent in Э3" findings.
+    spec_devices = {d.normalized for r in model.spec_rows
+                    for d in r.designations
+                    if r.row_role not in ('accessory', 'assembly_element')
+                    and r.quantity_semantics != 'length_or_bulk'}
     out = []
     only_scheme = sorted(scheme_devices - spec_devices)[:MAX_EXAMPLES]
     if only_scheme:
@@ -285,6 +342,12 @@ def verify_contact_consistency(model: EngineeringModel) -> list[dict]:
     out = []
     for row in model.spec_rows:
         if not row.unknown or row.quantity is None or row.quantity <= row.confirmed_count:
+            continue
+        # KD-PE-113: a confirmed device-count row with unknown fragments is a
+        # genuine under-specification; accessory/assembly/ambiguous rows are
+        # reported only when their role is unconfirmed.
+        if (row.classification_confidence == 'confirmed'
+                and row.quantity_semantics in _QTY_CHECK_SEMANTICS):
             continue
         ref = row.provenance
         place = ref.describe() if ref else 'Перечень элементов'

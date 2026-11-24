@@ -32,6 +32,12 @@ TRUNCATION_MARK = '…'
 
 TAG = reference_tag()
 
+# KD-PE-113: bulk/length unit signatures for legacy quantity-warning gating.
+# Shared with engineering_model.SpecRow (kept in sync by tests); a local copy
+# avoids an import cycle.
+_LENGTH_OR_BULK_UNITS_RE = re.compile(
+    r'(?<![\w])(?:м|мм|мм²|м2|см|км|кг|г|м2/м|пог\.?\s*м|м\.)(?![\w])', re.I)
+
 def designation_type(name):
     m = re.search(r'\.((?:ПЭ3)|(?:Э3))(?=\s|\.|$)', Path(name).stem, re.I)
     return m.group(1).upper() if m else None
@@ -604,7 +610,15 @@ def run(e3_filename, e3_bytes, pe_filename, pe_bytes, *, include_evidence=False)
     # No blanket "missing" reporting: drawings may contain auxiliary devices,
     # split representations and OCR/text-order artifacts.
     for r in rows:
-        if not r['unknown'] and len(r['entries']) > 1 and len(r['entries']) != r['quantity']:
+        # KD-PE-113: only rows whose quantity counts whole devices are
+        # eligible. Accessory/sub-part, bulk/length and ambiguous rows carry
+        # different quantity semantics; their apparent mismatch is reported
+        # by the semantic model (KD-EM-109-3), not by the legacy warning.
+        _name = str(r.get('name') or '')
+        _bulk = bool(_LENGTH_OR_BULK_UNITS_RE.search(_name))
+        _role_ok = (not r['unknown'] and len(r['entries']) > 1
+                    and not _bulk and r.get('row_band') is not None)
+        if not r['unknown'] and len(r['entries']) > 1 and len(r['entries']) != r['quantity'] and _role_ok:
             # The row number is evidence only when backed by PDF grid lines.
             # Unframed extraction retains page-only location without guessing.
             place = f"Лист PDF {r['page']}"

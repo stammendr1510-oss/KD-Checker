@@ -33,6 +33,12 @@ from kd_pe_105_confidence import (
 
 
 CODE = "KD-PE-105"
+
+# KD-PE-113: bulk/length unit signatures (kept in sync with
+# engineering_model.SpecRow); cable/wire/rail rows declare lengths, not
+# device instances, and never under-expand a designation list.
+_BULK_UNITS_RE = re.compile(
+    r"(?<![\w])(?:м|мм|мм²|м2|см|км|кг|г|м2/м|пог\.?\s*м|м\.)(?![\w])", re.I)
 DETAILS_SCHEMA_VERSION = 1
 DETAILS_KIND = "e3_pe3_missing_designations"
 
@@ -454,6 +460,12 @@ def _row_match_evidence(component, row):
     if row.get("unknown"):
         return MATCH_FAMILY_ONLY
     if not _group_compatible(designation, entries):
+        return MATCH_FAMILY_ONLY
+    # KD-PE-113: a row whose declared quantity is length/bulk units (cable,
+    # wire, rail by the metre) under-declares nothing about device instances.
+    # It can never serve as under_expanded evidence for a missing designation.
+    name = str(row.get("name") or "")
+    if name and _BULK_UNITS_RE.search(name):
         return MATCH_FAMILY_ONLY
     quantity = row.get("quantity")
     if isinstance(quantity, int) and quantity > len(entries):
