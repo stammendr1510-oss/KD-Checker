@@ -80,6 +80,54 @@ def build_excel_report(run):
     findings.auto_filter.ref = f'A1:J{max(1, findings.max_row)}'
     _format_sheet(findings, [7, 20, 18, 38, 24, 80, 80, 32, 70, 36])
     findings.print_title_rows = '1:1'
+
+    extraction = run.get('extracted_entities')
+    application = run.get('app_metadata')
+    if extraction or application:
+        observed = workbook.create_sheet('Извлечение')
+        observed.append(['Параметр', 'Значение'])
+        for label, value in [
+            ('Версия приложения', (application or {}).get('version', 'не указана')),
+            ('Ветка сборки', (application or {}).get('branch', 'не указана')),
+            ('Версия сборки', (application or {}).get('build', 'не указана')),
+            ('Устройства', (extraction or {}).get('devices', 0)),
+            ('Строки ПЭ3', (extraction or {}).get('spec_rows', 0)),
+            ('Соединения', (extraction or {}).get('connections', 0)),
+            ('Ссылки на документы', (extraction or {}).get('document_refs', 0)),
+            ('Упоминания в Э3', (extraction or {}).get('scheme_mentions', 0)),
+        ]:
+            observed.append([label, None])
+            _text(observed.cell(observed.max_row, 2), value)
+        preview = (extraction or {}).get('preview', {})
+        header_rows = [1]
+        observed.append([])
+        header_rows.append(observed.max_row + 1)
+        observed.append(['Обозначение устройства'])
+        for device in preview.get('devices', []):
+            observed.append([None])
+            _text(observed.cell(observed.max_row, 1), device.get('designation', ''))
+        observed.append([])
+        header_rows.append(observed.max_row + 1)
+        observed.append(['Документ ПЭ3', 'Строка', 'Обозначение', 'Количество', 'Наименование'])
+        for row in preview.get('pe3_rows', []):
+            observed.append([None, row.get('row'), None, row.get('quantity'), None])
+            _text(observed.cell(observed.max_row, 1), row.get('document', ''))
+            _text(observed.cell(observed.max_row, 3), row.get('designation', ''))
+            _text(observed.cell(observed.max_row, 5), row.get('name', ''))
+        observed.append([])
+        header_rows.append(observed.max_row + 1)
+        observed.append(['Документ', 'Лист', 'Строка', 'Источник', 'Назначение',
+                         'Провод', 'Кабель', 'Цвет', 'Сечение'])
+        for row in preview.get('connections', []):
+            observed.append([None, None, row.get('row'), None, None, None, None, None, None])
+            for column, key in enumerate(
+                    ('document', 'sheet', None, 'source', 'target', 'wire',
+                     'cable', 'color', 'cross_section'), 1):
+                if key:
+                    _text(observed.cell(observed.max_row, column), row.get(key, ''))
+        _format_sheet(observed, [34, 24, 14, 28, 28, 20, 20, 20, 20],
+                      header_rows=tuple(header_rows))
+
     checklist = run.get('checklist')
     if checklist is not None:
         # Preserve the exact historical checklist snapshot; never fetch at

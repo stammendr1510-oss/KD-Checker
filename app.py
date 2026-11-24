@@ -1,8 +1,10 @@
 """Self-hosted KD Checker MVP. Start: python app.py"""
 from __future__ import annotations
 import csv
+from dataclasses import replace
 import io
 import json
+import os
 import re
 from typing import Literal
 from pathlib import Path
@@ -19,7 +21,8 @@ from issue_tracking import MAX_COMMENT, validate_decision
 from excel_reports import build_excel_report
 from set_completeness import unpaired_document_findings
 from full_set_completeness import full_set_findings
-from adapters import apply_engineering_findings
+from adapters import apply_engineering_findings, deduplicate_findings
+from connection_import import route_xlsx
 from document_identity import pdf_identity_findings, unique_pdf_analysis_sources
 from pair_analysis import pair_analysis_plan
 from run_comparison import compare_runs, IncompatibleRuns
@@ -33,7 +36,14 @@ CONFIG = ROOT / "config.json"
 MAX_FILE = 20 * 1024 * 1024
 MAX_TOTAL = 100 * 1024 * 1024
 MAX_FILES = 100
-app = FastAPI(title="Проверка КД", version="0.2.0")
+APP_VERSION = "0.3.0"
+APP_METADATA = {
+    "version": APP_VERSION,
+    "branch": os.getenv("KD_BUILD_BRANCH") or os.getenv("GITHUB_REF_NAME")
+              or "feat/kd-pe-115-ingestion-pipeline",
+    "build": os.getenv("KD_BUILD_REF") or os.getenv("GITHUB_SHA") or "локальная сборка",
+}
+app = FastAPI(title="Проверка КД", version=APP_VERSION)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
 class ConfigUpdate(BaseModel):
@@ -92,7 +102,7 @@ def set_config(cfg: ConfigUpdate):
 async def check(files: list[UploadFile] = File(...)):
     if len(files) > MAX_FILES:
         raise HTTPException(413, f"Не более {MAX_FILES} файлов за проверку")
-    docs, errors, total = [], [], 0
+    docs, legacy_docs, errors, total = [], [], [], 0
     pdf_sources = []
     full_set_sources = []
     engineering_sources = []
@@ -107,9 +117,20 @@ async def check(files: list[UploadFile] = File(...)):
         if len(content) > MAX_FILE or total > MAX_TOTAL:
             raise HTTPException(413, "Превышен лимит: 20 МБ на файл, 100 МБ суммарно")
         try:
-            docs.append(extract(name, content))
-            if ext in ('.pdf', '.xlsx'):
-                engineering_sources.append((name, content))
+            routed = route_xlsx(content) if ext == '.xlsx' else None
+            document = extract(name, content)
+            docs.append(document)
+            if routed is not None:
+                legacy_sheet_names = {sheet.name for sheet in routed.sheets_for('pe3', 'sp')}
+                legacy_sheets = [sheet for sheet in document.sheets
+                                 if sheet.get('name') in legacy_sheet_names]
+                if legacy_sheets:
+                    legacy_docs.append(replace(document, sheets=legacy_sheets))
+                engineering_sources.append((name, content, routed))
+            else:
+                legacy_docs.append(document)
+                if ext == '.pdf':
+                    engineering_sources.append((name, content))
             if ext == ".pdf":
                 full_set_sources.append((name, content))
             if ext == ".pdf" and designation_type(name):
@@ -120,7 +141,7 @@ async def check(files: list[UploadFile] = File(...)):
             await uploaded.close()
     if not docs and not errors:
         raise HTTPException(400, "Выберите файлы")
-    issues = analyze(docs, load_cfg())
+    issues = analyze(legacy_docs, load_cfg())
     issues.extend(full_set_findings(full_set_sources,
                   [error["file"] for error in errors if error["file"].casefold().endswith(".pdf")]))
     issues.extend(unpaired_document_findings([name for name, _, _, _ in pdf_sources]))
@@ -149,16 +170,20 @@ async def check(files: list[UploadFile] = File(...)):
         issues, engineering_sources, load_cfg(), return_summary=True)
     for err in errors:
         issues.append({"severity":"error", "code":"KD-000", "file":err["file"], "location":"Загрузка", "message":err["message"], "recommendation":"Предоставьте корректный файл поддерживаемого формата"})
+    issues = deduplicate_findings(issues)
     # Every new check independently retrieves the current checklist when configured.
     # No stale snapshot can silently be reused if the upstream is unavailable.
     checklist = current_checklist_state()
     names = [d.name for d in docs] + [e["file"] for e in errors]
     if checklist["status"] == "not_configured":
-        run_id = save_run(names, issues)
+        run_id = save_run(names, issues, extracted_entities=extracted_entities,
+                          app_metadata=APP_METADATA)
     else:
-        run_id = save_run(names, issues, checklist=checklist)
+        run_id = save_run(names, issues, checklist=checklist,
+                          extracted_entities=extracted_entities,
+                          app_metadata=APP_METADATA)
     summary = {k:sum(i["severity"] == k for i in issues) for k in ("error", "warning", "info")}
-    return {"id":run_id, "files":[{"name":d.name, "type":d.ext, "pages":d.pages, "sheets":len(d.sheets), "entities":d.entities} for d in docs], "issues":issues, "summary":summary, "extracted_entities":extracted_entities, "checklist":checklist}
+    return {"id":run_id, "files":[{"name":d.name, "type":d.ext, "pages":d.pages, "sheets":len(d.sheets), "entities":d.entities} for d in docs], "issues":issues, "summary":summary, "extracted_entities":extracted_entities, "application":APP_METADATA, "checklist":checklist}
 
 @app.get("/api/runs")
 def runs():

@@ -20,6 +20,7 @@ DEFAULT_CLASS_PREFIX = (
 TAG_PREFIX = DEFAULT_CLASS_PREFIX  # historical name, re-exported for compat
 
 _CLASS_PREFIX = DEFAULT_CLASS_PREFIX
+UNIVERSAL_CLASS_PREFIX = r'(?:\d{1,2})?[A-ZА-ЯЁ]{1,12}'
 
 # An explicit range separator: three dots or an en/em dash.  An ASCII hyphen is
 # not accepted because it is common inside product type codes.
@@ -44,6 +45,11 @@ def reference_tag(prefix: str | None = None):
 
 def current_tag():
     return reference_tag()
+
+
+def universal_reference_tag():
+    """General table-designation matcher; independent of device class names."""
+    return reference_tag(UNIVERSAL_CLASS_PREFIX)
 
 
 def normalized(s):

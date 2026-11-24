@@ -33,7 +33,8 @@ def connections_from_rows(rows, *, document, sheet='', project='', revision='') 
                     'target_terminal', 'wire')
         if not all(str(row.get(key, '') or '').strip() for key in required):
             continue
-        location = f'{sheet}, строка {index}' if sheet else f'строка {index}'
+        row_number = row.get('_row_number', index)
+        location = f'{sheet}, строка {row_number}' if sheet else f'строка {row_number}'
         records.append(Connection(
             project=str(row.get('project') or project or document),
             revision=str(row.get('revision') or revision or 'не указана'),
