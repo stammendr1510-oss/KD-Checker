@@ -37,3 +37,6 @@ Thumbs.db
 
 # Local assistant tooling
 .codeassistant/
+
+# Local ground-truth data
+local_benchmarks/

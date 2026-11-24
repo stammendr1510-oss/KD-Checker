@@ -40,9 +40,9 @@ def connections_from_rows(rows, *, document, sheet='', project='', revision='') 
             revision=str(row.get('revision') or revision or 'не указана'),
             wire=str(row['wire']).strip(), cable=str(row.get('cable') or '').strip(),
             source=Endpoint(device=str(row['source_device']).strip(),
-                            terminal=str(row['source_terminal']).strip()),
+                            terminal=str(row.get('source_terminal') if row.get('source_terminal') is not None else '').strip()),
             target=Endpoint(device=str(row['target_device']).strip(),
-                            terminal=str(row['target_terminal']).strip()),
+                            terminal=str(row.get('target_terminal') if row.get('target_terminal') is not None else '').strip()),
             document=document, location=location,
         ))
     return records
@@ -76,7 +76,8 @@ def verify_dangling_devices(model) -> list:
     """
     if not model.connections:
         return []
-    wired = {device for device, _terminal in build_graph(model.connections)}
+    wired = {normalized(end.device) for record in model.connections
+             for end in (record.source, record.target) if end.kind != 'potential'}
     wired_bases = {base_designator(name) for name in wired}
     dangling = sorted(name for name in model.devices if base_designator(name) not in wired_bases)
     if not dangling:

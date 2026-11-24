@@ -289,11 +289,13 @@ def verify_endpoint_conflicts(model: EngineeringModel) -> list[dict]:
     claims: dict = {}
     for record in model.connections:
         for end in (record.source, record.target):
+            if end.kind == 'potential':
+                continue
             key = (_norm(end.device), _norm(end.terminal))
             claims.setdefault(key, []).append(record)
     out = []
     for (device, terminal), records in sorted(claims.items()):
-        wires = {r.wire for r in records}
+        wires = {_norm(r.wire) for r in records}
         if len(records) < 2 or len(wires) < 2:
             continue
         first = records[0]
