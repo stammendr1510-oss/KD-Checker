@@ -264,7 +264,7 @@ def verify_ambiguous_identities(model: EngineeringModel) -> list[dict]:
         places = [f'{raw} ({ref.describe()})' for raw, ref in sorted(amb.forms.items())]
         out.append(issue('info', CODE_AMB, amb.forms[forms[0]].document,
             amb.forms[forms[0]].describe(),
-            f'Смешение похожих латинских и кириллических букв в обозначении «{norm}": {", ".join(forms)}. Места исходных написаний: {"; ".join(places)}.',
+            f'Смешение похожих латинских и кириллических букв в обозначении «{norm}»: {", ".join(forms)}. Места исходных написаний: {"; ".join(places)}.',
             'Унифицируйте алфавит в исходном проекте; проверьте, не разные ли это объекты'))
     return out
 
