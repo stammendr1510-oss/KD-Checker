@@ -35,10 +35,11 @@ class Decision(BaseModel):
 
 
 def check_documents(files, cfg, *, include_evidence=False):
-    docs, failures, sources, pairs = [], [], [], []
+    docs, failures, sources, pairs, engineering_sources = [], [], [], [], []
     for name, content in files:
         try:
             docs.append(extract(name, content))
+            engineering_sources.append((name, content))
             if name.lower().endswith('.pdf'):
                 sources.append((name, content))
                 if designation_type(name):
@@ -59,7 +60,10 @@ def check_documents(files, cfg, *, include_evidence=False):
         issues += crosscheck(scheme[0], scheme[3], spec[0], spec[3], include_evidence=include_evidence)
     # All uploaded PDFs feed the engineering model, not only the
     # designation-typed E3/PE3 pairs (СП/ВО included).
-    issues = apply_engineering_findings(issues, files, cfg)
+    # Failed uploads remain present in the upload inventory, but their bytes
+    # must not be parsed a second time by the engineering adapters.
+    issues = apply_engineering_findings(issues, engineering_sources, cfg,
+                                        uploaded_names=[name for name, _ in files])
     return issues
 
 

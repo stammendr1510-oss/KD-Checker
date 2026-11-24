@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from dataclasses import replace
 import io
+import inspect
 import json
 import os
 import re
@@ -167,7 +168,8 @@ async def check(files: list[UploadFile] = File(...)):
     # the engineering model; designation-typed pairs alone would leave
     # document-reference checks (KD-EM-108-2) without any model to verify.
     issues, extracted_entities = apply_engineering_findings(
-        issues, engineering_sources, load_cfg(), return_summary=True)
+        issues, engineering_sources, load_cfg(), return_summary=True,
+        uploaded_names=[d.name for d in docs] + [e['file'] for e in errors])
     for err in errors:
         issues.append({"severity":"error", "code":"KD-000", "file":err["file"], "location":"Загрузка", "message":err["message"], "recommendation":"Предоставьте корректный файл поддерживаемого формата"})
     issues = deduplicate_findings(issues)
@@ -175,13 +177,18 @@ async def check(files: list[UploadFile] = File(...)):
     # No stale snapshot can silently be reused if the upstream is unavailable.
     checklist = current_checklist_state()
     names = [d.name for d in docs] + [e["file"] for e in errors]
-    if checklist["status"] == "not_configured":
-        run_id = save_run(names, issues, extracted_entities=extracted_entities,
-                          app_metadata=APP_METADATA)
-    else:
-        run_id = save_run(names, issues, checklist=checklist,
-                          extracted_entities=extracted_entities,
-                          app_metadata=APP_METADATA)
+    metadata = dict(extracted_entities=extracted_entities, app_metadata=APP_METADATA)
+    if checklist["status"] != "not_configured":
+        metadata['checklist'] = checklist
+    # Storage integrations may still implement the original two-argument
+    # callback. Negotiate additive keywords before calling it; a TypeError
+    # raised inside the callback must propagate without retrying the write.
+    parameters = inspect.signature(save_run).parameters
+    if not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        metadata = {key: value for key, value in metadata.items()
+                    if key in parameters and parameters[key].kind in
+                    (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)}
+    run_id = save_run(names, issues, **metadata)
     summary = {k:sum(i["severity"] == k for i in issues) for k in ("error", "warning", "info")}
     return {"id":run_id, "files":[{"name":d.name, "type":d.ext, "pages":d.pages, "sheets":len(d.sheets), "entities":d.entities} for d in docs], "issues":issues, "summary":summary, "extracted_entities":extracted_entities, "application":APP_METADATA, "checklist":checklist}
 
