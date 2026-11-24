@@ -371,106 +371,163 @@ def engineering_findings(pdf_sources, cfg=None) -> list:
 _CANONICAL_RULE_GROUPS = {
     'KD-PE-102': 'quantity_mismatch',
     'KD-EM-108-1': 'quantity_mismatch',
-    'KD-PE-101': 'inventory_coverage',
-    'KD-PE-105': 'inventory_coverage',
-    'KD-EM-109-2': 'inventory_coverage',
+    'KD-PE-101': 'scheme_pe3_mismatch',
+    'KD-PE-105': 'scheme_pe3_mismatch',
+    'KD-EM-109-2': 'scheme_pe3_mismatch',
+    'KD-PE-106': 'parameter_conflict',
+    'KD-EM-112-1': 'parameter_conflict',
+    'KD-PE-107': 'confusable_model',
+    'KD-EM-112-2': 'confusable_model',
+    'KD-PE-103': 'confusable_designator',
+    'KD-EM-108-3': 'confusable_designator',
+    'KD-SET-203': 'missing_set_document',
+    'KD-EM-108-2': 'missing_set_document',
+    'KD-EM-109-1': 'terminal_conflict',
 }
-_SEVERITY = {'info': 0, 'warning': 1, 'error': 2}
+_SEVERITY = {'info': 0, 'warning': 1, 'error': 2, 'critical': 3}
 
 
-def _finding_designator(finding):
-    details = finding.get('details') or {}
-    if details.get('missing'):
-        return ';'.join(sorted({normalized(item['designation']) for item in details['missing']}))
-    text = str(finding.get('message') or '')
-    source = re.search(r'в записи «([^»]+)»', text)
-    examples = re.search(r'примеры:\s*(.+)', text)
-    if source:
-        text = source.group(1)
-    elif examples:
-        text = examples.group(1)
-    else:
-        text += ' ' + str(finding.get('location') or '')
-    values = sorted({normalized(match.group(0))
-                     for match in universal_reference_tag().finditer(text)})
-    return ';'.join(values)
+def _entity_text(value):
+    return normalized(str(value))
 
 
-def _finding_source_pair(finding):
-    details = finding.get('details') if isinstance(finding.get('details'), dict) else {}
-    names = [details.get('e3_document'), details.get('pe3_document')]
-    if not any(names):
-        names = re.split(r'\s*/\s*', str(finding.get('file') or ''))
-    return tuple(sorted({pair_key(str(name)) for name in names if name}))
-
-
-def _conflict_evidence(finding, group):
-    """Different rows, quantities, directions and evidence remain separate defects."""
-    details = finding.get('details') or {}
+def _canonical_identity(finding):
+    code = finding.get('code', '')
+    group = _CANONICAL_RULE_GROUPS.get(code)
     message = str(finding.get('message') or '')
-    if group == 'quantity_mismatch':
-        counts = re.search(r'количество (\d+).*?обозначений \((\d+)\)', message)
-        if counts:
-            page = re.search(r'(?:лист(?:\s+PDF)?)[ :]*(\d+)', str(finding.get('location') or ''), re.I)
-            row = re.search(r'строк[а-я]*(?:\s+таблицы)?[ :]*(\d+)', str(finding.get('location') or ''), re.I)
-            return ('quantity', *counts.groups(), page.group(1) if page else None,
-                    row.group(1) if row else details.get('pe3_table_row'))
-    if group == 'inventory_coverage':
-        code = finding.get('code')
-        direction = ('spec_to_scheme' if code == 'KD-PE-101' or 'извлечено из ПЭ3' in message
-                     else 'scheme_to_spec')
-        # Inventory under-expansion is a separate conflict from simple absence.
-        reason = details.get('reason')
-        if reason and reason != 'no_matching_pe3_row':
-            return (direction, reason, details.get('pe3_page'), details.get('pe3_table_row'))
-        text = message + ' ' + str(finding.get('location') or '')
-        places = tuple(sorted(set(re.findall(r'лист(?:\s+PDF)?\s+(\d+)(?:,\s*строка(?:\s+таблицы)?\s+(\d+))?', text, re.I))))
-        return (direction, places)
-    return (str(finding.get('location') or ''),
-            json.dumps(finding.get('evidence') or {}, sort_keys=True, ensure_ascii=False),
-            details.get('reason'), details.get('pe3_table_row'), message)
+    details = finding.get('details') or {}
+    if not isinstance(details, dict):
+        details = {}
+    # An ambiguous repeat is not an established parameter conflict.
+    if code == 'KD-PE-106' and 'без явного' in message:
+        return None
+    if code == 'KD-PE-105' and (details.get('status') == 'not_evaluated'
+                               or 'not_evaluated' in message):
+        return None
+    if not group:
+        return None
+    if finding.get('canonical_type') == group and finding.get('target_entity'):
+        return group, _entity_text(finding['target_entity'])
+    quotes = re.findall(r'«([^»]+)»', message)
+    entity = ''
+    if group == 'confusable_model':
+        if len(quotes) >= 2:
+            entity = '|'.join(sorted(_entity_text(q) for q in quotes[:2]))
+    elif group in ('parameter_conflict', 'terminal_conflict', 'missing_set_document'):
+        if quotes:
+            entity = _entity_text(quotes[0])
+    elif group == 'confusable_designator':
+        if code == 'KD-EM-108-3' and quotes:
+            entity = _entity_text(quotes[0])
+        else:
+            forms = message.split('Места исходных написаний:', 1)[0]
+            values = {_entity_text(m.group(0)) for m in universal_reference_tag().finditer(forms)}
+            if len(values) == 1:
+                entity = values.pop()
+    elif group == 'quantity_mismatch' and quotes:
+        entries, unknown = expand_notation(quotes[0])
+        if entries and not unknown:
+            entity = ';'.join(sorted({_entity_text(v) for v in entries}))
+    elif group == 'scheme_pe3_mismatch':
+        values = {_entity_text(item['designation']) for item in details.get('missing', [])
+                  if isinstance(item, dict) and item.get('designation')}
+        if not values:
+            examples = re.search(r'примеры:\s*(.+)', message)
+            if examples:
+                values = {_entity_text(m.group(0)) for m in
+                          universal_reference_tag().finditer(examples.group(1).split(').')[0])}
+        if values:
+            direction = ('spec_to_scheme' if code == 'KD-PE-101' or 'извлечено из ПЭ3' in message
+                         else 'scheme_to_spec')
+            entity = direction + ':' + ';'.join(sorted(values))
+    return (group, entity) if entity else None
 
 
 def _finding_refs(finding):
+    refs = list(finding.get('source_refs') or [])
     location = str(finding.get('location') or '')
-    page = re.search(r'лист(?:\s+PDF)?\s+(\d+)', location, re.I)
-    row = re.search(r'строк[а-я]*(?:\s+таблицы)?\s+(\d+)', location, re.I)
-    return [{'document': finding.get('file'), 'page': int(page[1]) if page else None,
-             'row': int(row[1]) if row else None, 'location': location}]
+    for part in filter(None, (p.strip() for p in location.split(';'))):
+        page = re.search(r'лист(?:\s+PDF)?\s+(\d+)', part, re.I)
+        row = re.search(r'строк[а-я]*(?:\s+таблицы)?\s+(\d+)', part, re.I)
+        ref = {'document': finding.get('file'), 'page': int(page[1]) if page else None,
+               'row': int(row[1]) if row else None, 'location': part}
+        if ref not in refs:
+            refs.append(ref)
+    return refs
+
+
+def _dedup_identity(finding):
+    identity = _canonical_identity(finding)
+    if identity:
+        return identity
+    # Older quantity diagnostics did not quote their designator.
+    if _CANONICAL_RULE_GROUPS.get(finding.get('code')) == 'quantity_mismatch':
+        message = str(finding.get('message') or '')
+        if '«' not in message:
+            values = {_entity_text(m.group(0)) for m in universal_reference_tag().finditer(message)}
+            if len(values) == 1:
+                return 'quantity_mismatch', values.pop()
+    return None
+
+
+def _shared_conflict(current, incoming, identity):
+    same_message = current.get('message') == incoming.get('message')
+    same_file = current.get('file') == incoming.get('file')
+    left, right = _finding_refs(current), _finding_refs(incoming)
+    shared = any(ref in right for ref in left)
+    if not identity:
+        return same_message and same_file and current.get('location') == incoming.get('location')
+    family, _ = identity
+    if family == 'terminal_conflict':
+        # A terminal may participate in several independent defects.
+        return same_message and same_file and (shared or left == right)
+    if family == 'missing_set_document':
+        # Additive legacy and engineering diagnostics can describe different
+        # obligations for the same referenced document. Only identical claims
+        # are interchangeable; repeated locations are collected as evidence.
+        return same_message and (same_file or shared)
+    # These rule families describe aggregate entity conflicts. Multiple rows,
+    # pages, counts and complementary rule messages are evidence of one card.
+    return True
 
 
 def deduplicate_findings(findings):
-    """Merge only an entity/conflict/evidence match; preserve all contributing rules."""
+    """Collapse aggregate conflicts while retaining independent diagnostic claims."""
     output, positions = [], {}
     for finding in findings:
         code = str(finding.get('code') or '')
-        group = _CANONICAL_RULE_GROUPS.get(code, code)
-        designator = _finding_designator(finding)
-        if not designator:
-            key = (code, finding.get('file'), finding.get('location'), finding.get('message'))
-        else:
-            key = (group, designator, _finding_source_pair(finding),
-                   _conflict_evidence(finding, group))
-        if key not in positions:
-            positions[key] = len(output)
-            output.append(dict(finding))
+        identity = _dedup_identity(finding)
+        key = ('canonical', *identity) if identity else (
+            'exact', code, finding.get('file'), finding.get('location'), finding.get('message'))
+        incoming = dict(finding)
+        if identity:
+            incoming['canonical_type'], incoming['target_entity'] = identity
+        index = None
+        for candidate in positions.get(key, []):
+            current = output[candidate]
+            if current == incoming or _shared_conflict(current, incoming, identity):
+                index = candidate
+                break
+        if index is None:
+            positions.setdefault(key, []).append(len(output))
+            output.append(incoming)
             continue
-        index = positions[key]
         current = output[index]
-        winner = (finding if _SEVERITY.get(finding.get('severity'), -1) >
-                  _SEVERITY.get(current.get('severity'), -1) else current)
+        winner = (incoming if _SEVERITY.get(str(incoming.get('severity')).lower(), -1) >
+                  _SEVERITY.get(str(current.get('severity')).lower(), -1) else current)
         merged = dict(winner)
-        merged['related_codes'] = sorted(set(current.get('related_codes', [current['code']])) |
-                                         set(finding.get('related_codes', [code])))
-        locations = []
-        for item in (current, finding):
-            for ref in item.get('source_refs', _finding_refs(item)):
-                if ref not in locations:
-                    locations.append(ref)
-        merged['source_refs'] = locations
+        merged['related_codes'] = sorted(set(current.get('related_codes', [])) |
+                                         set(incoming.get('related_codes', [])) |
+                                         {current['code'], code})
+        refs = []
+        for item in (current, incoming):
+            for ref in _finding_refs(item):
+                if ref not in refs:
+                    refs.append(ref)
+        merged['source_refs'] = refs
         for field in ('evidence', 'details'):
             if field not in merged:
-                for item in (current, finding):
+                for item in (current, incoming):
                     if field in item:
                         merged[field] = item[field]
         output[index] = merged
