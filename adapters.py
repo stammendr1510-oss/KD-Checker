@@ -16,7 +16,7 @@ from full_set_completeness import specification_references
 from kd_crosscheck import (designation_type, expand_notation, get_spec_rows,
                            pair_key, scheme_designations)
 from confusable_designations import model_tokens
-from naming import normalized, universal_reference_tag, letter_designator
+from naming import normalized, universal_reference_tag, letter_designator, normalize_pe3_row
 import fitz
 import re
 from itertools import islice
@@ -122,7 +122,8 @@ def model_from_spec_rows(rows, filename: str, model: EngineeringModel | None = N
     model = model or EngineeringModel()
     prev_designations: list[str] = []
     prev_has_band = False
-    for r in rows:
+    for raw_row in rows:
+        r = normalize_pe3_row(raw_row)
         ref = source_ref(filename, page=r.get('page'), row=r.get('table_row'), bounds=r.get('row_band'))
         des = [Designation.classify(d) for d in sorted(r.get('entries', set()))]
         name = str(r.get('name') or '')

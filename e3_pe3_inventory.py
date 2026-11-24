@@ -12,7 +12,7 @@ import math
 import re
 
 from kd_crosscheck import MAX_PDF_PAGES, designation_type, normalized, pair_key
-from naming import current_tag, expand_notation, base_designator
+from naming import current_tag, expand_notation, base_designator, normalize_pe3_row, coverage_keys
 from identifier_classification import (
     AMBIGUOUS,
     CONNECTION_REFERENCE,
@@ -228,8 +228,7 @@ def base_of(designation):
 
 def matching_keys(designation):
     """Return exact and parent keys without rewriting source evidence."""
-    value = normalized(designation)
-    return {value, base_of(value)}
+    return coverage_keys(designation)
 
 
 def parse_designation(designation):
@@ -787,7 +786,8 @@ def compare_inventories(e3_document, pe3_document, mentions, rows, *,
 
     pe3_entries = set()
     rows_by_family = defaultdict(list)
-    for row in rows:
+    for raw_row in rows:
+        row = normalize_pe3_row(raw_row)
         entries = row.get("entries") or set()
         pe3_entries.update(entries)
         for family in _row_families(row):
