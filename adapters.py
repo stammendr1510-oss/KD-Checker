@@ -11,14 +11,15 @@ from engineering_model import (
     run_universal_verifiers, run_verifiers,
 )
 from engineering_graph import connections_from_rows, run_graph_verifiers
-from connection_import import RoutedWorkbook, route_xlsx
+from connection_import import RoutedWorkbook, route_xlsx, classify_connection_row
 from full_set_completeness import specification_references
 from kd_crosscheck import (designation_type, expand_notation, get_spec_rows,
                            pair_key, scheme_designations)
 from confusable_designations import model_tokens
-from naming import normalized, universal_reference_tag
+from naming import normalized, universal_reference_tag, letter_designator
 import fitz
 import re
+from itertools import islice
 
 
 def source_ref(document: str, page=None, row=None, bounds=None) -> SourceRef:
@@ -97,6 +98,8 @@ def _classify_spec_row(r: dict, prev_designations: list[str], prev_has_band: boo
         # Indented sub-row with its own designator under a parent device:
         # assembly units, not standalone devices.
         role, sem, conf = 'assembly_element', 'assembly_units', 'confirmed'
+    elif has_acc_cues:
+        role, sem, conf = 'accessory', 'accessory_qty', 'confirmed' if band else 'ambiguous'
     elif len(entries) > 1:
         role = 'grouped_position'
         sem = 'grouped_instances'
@@ -142,7 +145,7 @@ def model_from_scheme(pdf_bytes: bytes, filename: str, model: EngineeringModel |
     """Map Э3 scheme designator mentions into the model."""
     model = model or EngineeringModel()
     with fitz.open(stream=pdf_bytes, filetype='pdf') as pdf:
-        for pi, page in enumerate(pdf):
+        for pi, page in enumerate(islice(pdf, 100)):
             ref = source_ref(filename, page=pi + 1)
             for raw in scheme_designations(page):
                 des = Designation.classify(raw)
@@ -197,8 +200,9 @@ def model_from_xlsx(content: bytes, filename: str,
                 raw = str(record.get('designation') or '').strip()
                 entries, unknown = expand_notation(raw)
                 try:
-                    quantity = int(record.get('quantity'))
-                except (TypeError, ValueError):
+                    value = float(record.get('quantity'))
+                    quantity = int(value) if value >= 0 and value.is_integer() else None
+                except (TypeError, ValueError, OverflowError):
                     quantity = None
                 rows.append({
                     'source': raw, 'entries': entries, 'unknown': unknown,
@@ -264,6 +268,23 @@ def build_model(pdf_sources, names=None) -> EngineeringModel:
         except Exception as exc:  # noqa: BLE001 - must surface, never swallow
             diagnostics.append(_em000(f'извлечение {identity.kind}', name, exc))
             parsed_counts[name] = 0
+    # Letter-only labels need corroboration from a designation column; uppercase
+    # prose in a drawing alone is insufficient engineering identity evidence.
+    letters = {d.raw for row in model.spec_rows for d in row.designations if letter_designator(d.raw)}
+    if letters:
+        for name, content, _routed in sources:
+            identity = classify_pdf_name(name)
+            if identity and identity.kind == 'Э3':
+                with fitz.open(stream=content, filetype='pdf') as pdf:
+                    for pi, page in enumerate(islice(pdf, 100)):
+                        existing = {m.designation.raw for m in model.scheme_mentions
+                                    if m.provenance.document == name and m.provenance.page == pi + 1}
+                        for raw in (set(scheme_designations(page, letter_candidates=letters)) & letters) - existing:
+                            ref = source_ref(name, page=pi + 1)
+                            des = Designation.classify(raw)
+                            model.scheme_mentions.append(SchemeMention(designation=des, provenance=ref))
+                            model.add_device(des, ref)
+                            parsed_counts[name] = parsed_counts.get(name, 0) + 1
     # Extraction-gap diagnostics: a recognized engineering document that
     # produced zero model entities means the analysis is incomplete.
     for name, count in parsed_counts.items():
@@ -358,7 +379,18 @@ _SEVERITY = {'info': 0, 'warning': 1, 'error': 2}
 
 
 def _finding_designator(finding):
-    text = ' '.join(str(finding.get(key) or '') for key in ('message', 'location'))
+    details = finding.get('details') or {}
+    if details.get('missing'):
+        return ';'.join(sorted({normalized(item['designation']) for item in details['missing']}))
+    text = str(finding.get('message') or '')
+    source = re.search(r'в записи «([^»]+)»', text)
+    examples = re.search(r'примеры:\s*(.+)', text)
+    if source:
+        text = source.group(1)
+    elif examples:
+        text = examples.group(1)
+    else:
+        text += ' ' + str(finding.get('location') or '')
     values = sorted({normalized(match.group(0))
                      for match in universal_reference_tag().finditer(text)})
     return ';'.join(values)
@@ -372,38 +404,150 @@ def _finding_source_pair(finding):
     return tuple(sorted({pair_key(str(name)) for name in names if name}))
 
 
+def _conflict_evidence(finding, group):
+    """Different rows, quantities, directions and evidence remain separate defects."""
+    details = finding.get('details') or {}
+    message = str(finding.get('message') or '')
+    if group == 'quantity_mismatch':
+        counts = re.search(r'количество (\d+).*?обозначений \((\d+)\)', message)
+        if counts:
+            page = re.search(r'(?:лист(?:\s+PDF)?)[ :]*(\d+)', str(finding.get('location') or ''), re.I)
+            row = re.search(r'строк[а-я]*(?:\s+таблицы)?[ :]*(\d+)', str(finding.get('location') or ''), re.I)
+            return ('quantity', *counts.groups(), page.group(1) if page else None,
+                    row.group(1) if row else details.get('pe3_table_row'))
+    if group == 'inventory_coverage':
+        code = finding.get('code')
+        direction = ('spec_to_scheme' if code == 'KD-PE-101' or 'извлечено из ПЭ3' in message
+                     else 'scheme_to_spec')
+        # Inventory under-expansion is a separate conflict from simple absence.
+        reason = details.get('reason')
+        if reason and reason != 'no_matching_pe3_row':
+            return (direction, reason, details.get('pe3_page'), details.get('pe3_table_row'))
+        text = message + ' ' + str(finding.get('location') or '')
+        places = tuple(sorted(set(re.findall(r'лист(?:\s+PDF)?\s+(\d+)(?:,\s*строка(?:\s+таблицы)?\s+(\d+))?', text, re.I))))
+        return (direction, places)
+    return (str(finding.get('location') or ''),
+            json.dumps(finding.get('evidence') or {}, sort_keys=True, ensure_ascii=False),
+            details.get('reason'), details.get('pe3_table_row'), message)
+
+
+def _finding_refs(finding):
+    location = str(finding.get('location') or '')
+    page = re.search(r'лист(?:\s+PDF)?\s+(\d+)', location, re.I)
+    row = re.search(r'строк[а-я]*(?:\s+таблицы)?\s+(\d+)', location, re.I)
+    return [{'document': finding.get('file'), 'page': int(page[1]) if page else None,
+             'row': int(row[1]) if row else None, 'location': location}]
+
+
 def deduplicate_findings(findings):
-    """Collapse legacy/model overlap while retaining strongest evidence."""
+    """Merge only an entity/conflict/evidence match; preserve all contributing rules."""
     output, positions = [], {}
     for finding in findings:
         code = str(finding.get('code') or '')
         group = _CANONICAL_RULE_GROUPS.get(code, code)
         designator = _finding_designator(finding)
-        # Empty designators cannot prove semantic overlap across rule codes.
         if not designator:
-            group = code
-        if designator:
-            key = (group, designator, _finding_source_pair(finding))
+            key = (code, finding.get('file'), finding.get('location'), finding.get('message'))
         else:
-            # Same-code findings in one document may describe different rows.
-            # Without a designation, collapse exact duplicates only.
-            key = (code, '', _finding_source_pair(finding),
-                   str(finding.get('location') or ''),
-                   str(finding.get('message') or ''),
-                   str(finding.get('recommendation') or ''))
+            key = (group, designator, _finding_source_pair(finding),
+                   _conflict_evidence(finding, group))
         if key not in positions:
             positions[key] = len(output)
-            output.append(finding)
+            output.append(dict(finding))
             continue
         index = positions[key]
         current = output[index]
-        if _SEVERITY.get(finding.get('severity'), -1) > _SEVERITY.get(current.get('severity'), -1):
-            output[index] = finding
-        elif finding.get('evidence') and not current.get('evidence'):
-            merged = dict(current)
-            merged['evidence'] = finding['evidence']
-            output[index] = merged
+        winner = (finding if _SEVERITY.get(finding.get('severity'), -1) >
+                  _SEVERITY.get(current.get('severity'), -1) else current)
+        merged = dict(winner)
+        merged['related_codes'] = sorted(set(current.get('related_codes', [current['code']])) |
+                                         set(finding.get('related_codes', [code])))
+        locations = []
+        for item in (current, finding):
+            for ref in item.get('source_refs', _finding_refs(item)):
+                if ref not in locations:
+                    locations.append(ref)
+        merged['source_refs'] = locations
+        for field in ('evidence', 'details'):
+            if field not in merged:
+                for item in (current, finding):
+                    if field in item:
+                        merged[field] = item[field]
+        output[index] = merged
     return output
+
+
+def _document_completeness(model, sources):
+    reports = []
+    for name, content, routed in sources:
+        report = dict(document=name, detected_type='Не определён', parser='Не выбран',
+                      raw_rows=None, extracted=0, incomplete=0, ambiguous=0, rejected=0,
+                      reasons=[], applicable_checks=[], skipped_checks=[], confidence_limits=[])
+        if _Path(name).suffix.casefold() == '.xlsx':
+            routed = routed or route_xlsx(content)
+            report.update(detected_type=', '.join(dict.fromkeys(
+                {'connections': 'Соединения', 'pe3': 'ПЭ3', 'sp': 'СП'}.get(sh.role, 'Не определён')
+                for sh in routed.sheets)), parser='openpyxl: заголовки и позиции столбцов', raw_rows=0)
+            report['confidence_limits'].append('Формулы не вычисляются: используются сохранённые значения ячеек')
+            for sheet in routed.sheets:
+                report['confidence_limits'].extend(sheet.limits)
+                report['raw_rows'] += len(sheet.records)
+                for row in sheet.records:
+                    if sheet.role == 'connections':
+                        status, reason = classify_connection_row(row)
+                    elif sheet.role == 'pe3':
+                        entries, unknown = expand_notation(str(row.get('designation') or ''))
+                        if unknown:
+                            status, reason = 'ambiguous', 'Неоднозначные фрагменты обозначения: ' + '; '.join(unknown)
+                        elif not entries or row.get('quantity') is None:
+                            status, reason = 'incomplete', 'Нет обозначения или количества'
+                        else:
+                            try:
+                                quantity = float(row['quantity'])
+                                valid = quantity >= 0 and quantity.is_integer()
+                            except (TypeError, ValueError, OverflowError):
+                                valid = False
+                            status, reason = ('extracted', '') if valid else ('rejected', 'Некорректное количество')
+                    elif sheet.role == 'sp':
+                        raw = str(row.get('document_ref') or row.get('designation') or '')
+                        status, reason = (('extracted', '') if designation_type(raw) or designation_type(raw + '.pdf')
+                                          else ('incomplete', 'Тип ссылки на документ не распознан'))
+                    else:
+                        status, reason = 'rejected', 'Заголовки таблицы не распознаны'
+                    report[status] += 1
+                    if status != 'extracted':
+                        report['reasons'].append(dict(sheet=sheet.name, row=row['_row_number'], status=status, reason=reason))
+            roles = {sh.role for sh in routed.sheets}
+            for role, check in [('connections', 'Топология соединений'), ('pe3', 'Количество и обозначения'), ('sp', 'Ссылки на документы')]:
+                report['applicable_checks' if role in roles else 'skipped_checks'].append(check)
+            if len(routed.sheets) >= 30:
+                report['confidence_limits'].append('Обработка ограничена 30 листами XLSX')
+        else:
+            identity = classify_pdf_name(name)
+            report['detected_type'] = identity.kind if identity else 'PDF без распознанного типа'
+            report['parser'] = 'PyMuPDF: текст и геометрия'
+            rows = [r for r in model.spec_rows if r.provenance and r.provenance.document == name]
+            refs = [r for r in model.document_refs if r.provenance and r.provenance.document == name]
+            mentions = [r for r in model.scheme_mentions if r.provenance.document == name]
+            report['extracted'] = len(rows) + len(refs) + len(mentions)
+            for row in rows:
+                if row.unknown or row.quantity is None:
+                    report['extracted'] -= 1
+                    report['ambiguous'] += 1
+                    report['reasons'].append(dict(row=row.provenance.row, status='ambiguous',
+                        reason='Неоднозначное обозначение или количество'))
+            report['applicable_checks'] = ['Текстовые проверки']
+            if identity and report['extracted']:
+                report['applicable_checks'].append('Сопоставление извлечённых сущностей')
+            else:
+                report['skipped_checks'].append('Сопоставление: тип или сущности не распознаны')
+            report['skipped_checks'].append('Топология без структурированных соединений')
+            report['confidence_limits'] = ['Число исходных строк PDF достоверно не определено; OCR не выполняется',
+                                           'Обработка Э3/ПЭ3 ограничена первыми 100 страницами']
+            if not _pdf_has_text(content):
+                report['confidence_limits'].append('Текстовый слой отсутствует')
+        reports.append(report)
+    return reports
 
 
 def _model_summary(model, sources):
@@ -471,6 +615,7 @@ def _model_summary(model, sources):
         'preview': {'devices': devices, 'pe3_rows': spec_rows,
                     'connections': connections},
         'by_source': by_source,
+        'documents': _document_completeness(model, normalized_sources),
         'metadata': {
             'xlsx_uploaded': xlsx_uploaded,
             'scope_note': (None if xlsx_uploaded else

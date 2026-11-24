@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 
 from engine import issue
-from naming import normalized
+from naming import normalized, base_designator
 from connection_checks import Connection, Endpoint
 
 MAX_EXAMPLES = 8
@@ -29,9 +29,9 @@ def connections_from_rows(rows, *, document, sheet='', project='', revision='') 
     """Map validated, header-normalized workbook rows to graph connections."""
     records = []
     for index, row in enumerate(rows, 2):
-        required = ('source_device', 'source_terminal', 'target_device',
-                    'target_terminal', 'wire')
-        if not all(str(row.get(key, '') or '').strip() for key in required):
+        from connection_import import classify_connection_row
+        status, _reason = classify_connection_row(row)
+        if status != 'extracted':
             continue
         row_number = row.get('_row_number', index)
         location = f'{sheet}, строка {row_number}' if sheet else f'строка {row_number}'
@@ -77,7 +77,8 @@ def verify_dangling_devices(model) -> list:
     if not model.connections:
         return []
     wired = {device for device, _terminal in build_graph(model.connections)}
-    dangling = sorted(name for name in model.devices if name not in wired)
+    wired_bases = {base_designator(name) for name in wired}
+    dangling = sorted(name for name in model.devices if base_designator(name) not in wired_bases)
     if not dangling:
         return []
     examples = dangling[:MAX_EXAMPLES]

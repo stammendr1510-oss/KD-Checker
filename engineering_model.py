@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from connection_checks import Connection
 from engine import issue
-from naming import CYR_LOOKALIKES, current_tag, normalized
+from naming import CYR_LOOKALIKES, current_tag, normalized, base_designator
 
 
 # --- Universal product-attribute signatures (KD-PE-112) ----------------------
@@ -318,10 +318,7 @@ def verify_coverage(model: EngineeringModel) -> list[dict]:
                     if r.row_role not in ('accessory', 'assembly_element')
                     and r.quantity_semantics != 'length_or_bulk'}
     def keys(value):
-        value = normalized(value)
-        match = re.fullmatch(r'(.+)\.(\d+)', value)
-        parent = match.group(1) if match and current_tag().fullmatch(match.group(1)) else value
-        return {value, parent}
+        return {normalized(value), base_designator(value)}
 
     matched_scheme = {value for value in scheme_devices
                       if any(keys(value) & keys(other) for other in spec_devices)}

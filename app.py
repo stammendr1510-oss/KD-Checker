@@ -5,7 +5,6 @@ from dataclasses import replace
 import io
 import inspect
 import json
-import os
 import re
 from typing import Literal
 from pathlib import Path
@@ -24,6 +23,7 @@ from set_completeness import unpaired_document_findings
 from full_set_completeness import full_set_findings
 from adapters import apply_engineering_findings, deduplicate_findings
 from connection_import import route_xlsx
+from build_metadata import build_metadata
 from document_identity import pdf_identity_findings, unique_pdf_analysis_sources
 from pair_analysis import pair_analysis_plan
 from run_comparison import compare_runs, IncompatibleRuns
@@ -38,12 +38,7 @@ MAX_FILE = 20 * 1024 * 1024
 MAX_TOTAL = 100 * 1024 * 1024
 MAX_FILES = 100
 APP_VERSION = "0.3.0"
-APP_METADATA = {
-    "version": APP_VERSION,
-    "branch": os.getenv("KD_BUILD_BRANCH") or os.getenv("GITHUB_REF_NAME")
-              or "feat/kd-pe-115-ingestion-pipeline",
-    "build": os.getenv("KD_BUILD_REF") or os.getenv("GITHUB_SHA") or "локальная сборка",
-}
+APP_METADATA = build_metadata(APP_VERSION)
 app = FastAPI(title="Проверка КД", version=APP_VERSION)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
@@ -122,10 +117,11 @@ async def check(files: list[UploadFile] = File(...)):
             document = extract(name, content)
             docs.append(document)
             if routed is not None:
-                legacy_sheet_names = {sheet.name for sheet in routed.sheets_for('pe3', 'sp')}
+                # PE3 designation cells enumerate devices, not document references.
+                legacy_sheet_names = {sheet.name for sheet in routed.sheets_for('sp')}
                 legacy_sheets = [sheet for sheet in document.sheets
                                  if sheet.get('name') in legacy_sheet_names]
-                if legacy_sheets:
+                if legacy_sheets or routed.sheets_for('pe3'):
                     legacy_docs.append(replace(document, sheets=legacy_sheets))
                 engineering_sources.append((name, content, routed))
             else:
@@ -170,6 +166,26 @@ async def check(files: list[UploadFile] = File(...)):
     issues, extracted_entities = apply_engineering_findings(
         issues, engineering_sources, load_cfg(), return_summary=True,
         uploaded_names=[d.name for d in docs] + [e['file'] for e in errors])
+    # Account for every upload, including formats outside the engineering seam.
+    observed_names = {item['document'] for item in extracted_entities.get('documents', [])}
+    for document in docs:
+        if document.name not in observed_names:
+            raw_rows = (sum(len(sheet.get('rows', [])) for sheet in document.sheets)
+                        if document.sheets else None)
+            extracted_entities.setdefault('documents', []).append(dict(
+                document=document.name, detected_type=document.ext.lstrip('.').upper(),
+                parser='Базовый разбор формата', raw_rows=raw_rows, extracted=0,
+                incomplete=0, ambiguous=0, rejected=0, reasons=[],
+                applicable_checks=['Базовые проверки документа'],
+                skipped_checks=['Инженерное сопоставление сущностей'],
+                confidence_limits=['Формат не подключён к инженерной модели'] + document.notes))
+    for error in errors:
+        extracted_entities.setdefault('documents', []).append(dict(
+            document=error['file'], detected_type='Не определён', parser='Чтение не выполнено',
+            raw_rows=None, extracted=0, incomplete=0, ambiguous=0, rejected=0,
+            reasons=[dict(row=None, status='rejected', reason=error['message'])],
+            applicable_checks=[], skipped_checks=['Проверки содержимого'],
+            confidence_limits=['Документ не прочитан; количество строк неизвестно']))
     for err in errors:
         issues.append({"severity":"error", "code":"KD-000", "file":err["file"], "location":"Загрузка", "message":err["message"], "recommendation":"Предоставьте корректный файл поддерживаемого формата"})
     issues = deduplicate_findings(issues)
@@ -177,7 +193,8 @@ async def check(files: list[UploadFile] = File(...)):
     # No stale snapshot can silently be reused if the upstream is unavailable.
     checklist = current_checklist_state()
     names = [d.name for d in docs] + [e["file"] for e in errors]
-    metadata = dict(extracted_entities=extracted_entities, app_metadata=APP_METADATA)
+    application = build_metadata(APP_VERSION)
+    metadata = dict(extracted_entities=extracted_entities, app_metadata=application)
     if checklist["status"] != "not_configured":
         metadata['checklist'] = checklist
     # Storage integrations may still implement the original two-argument
@@ -190,7 +207,7 @@ async def check(files: list[UploadFile] = File(...)):
                     (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)}
     run_id = save_run(names, issues, **metadata)
     summary = {k:sum(i["severity"] == k for i in issues) for k in ("error", "warning", "info")}
-    return {"id":run_id, "files":[{"name":d.name, "type":d.ext, "pages":d.pages, "sheets":len(d.sheets), "entities":d.entities} for d in docs], "issues":issues, "summary":summary, "extracted_entities":extracted_entities, "application":APP_METADATA, "checklist":checklist}
+    return {"id":run_id, "files":[{"name":d.name, "type":d.ext, "pages":d.pages, "sheets":len(d.sheets), "entities":d.entities} for d in docs], "issues":issues, "summary":summary, "extracted_entities":extracted_entities, "application":application, "checklist":checklist}
 
 @app.get("/api/runs")
 def runs():

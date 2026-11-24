@@ -2,7 +2,7 @@
 from __future__ import annotations
 import re
 from collections import defaultdict
-from itertools import islice
+from itertools import islice, chain
 from pathlib import Path
 import fitz
 from pdf_match_evidence import MAX_LOCATIONS, MAX_MATCHES, location_key, source
@@ -13,6 +13,8 @@ from confusable_designations import confusable_findings, model_tokens
 # for backward compatibility. Reference classes are configurable via
 # naming.configure_reference_classes() (no hardcoded per-class rules).
 from naming import (  # noqa: F401
+    expand_notation, _notation_parts, _split_single_line, _is_complete_notation,
+    base_designator, letter_designator,
     CYR_LOOKALIKES,
     _notation_part,
     DEFAULT_CLASS_PREFIX,
@@ -48,99 +50,6 @@ def pair_key(name):
 
 def issue(level, code, file, place, message, recommendation):
     return {'severity':level, 'code':code, 'file':file, 'location':place, 'message':message, 'recommendation':recommendation}
-
-def _is_complete_notation(text, tag=None):
-    value = normalized(text)
-    tag = tag or current_tag()
-    return bool(tag.fullmatch(value) or RANGE.fullmatch(value))
-
-def _split_single_line(line, tag=None):
-    """Split tokens of one physical line, preserving the legacy ambiguity rule.
-
-    A complete designation followed by another token on the *same* line is
-    ambiguous (``XT1 2`` must not become ``XT1`` or ``XT12``).  A wrapped range
-    such as ``1TA1... 1TA3`` is joined because the first token is incomplete.
-    """
-    tag = tag or current_tag()
-    joined = ''
-    for token in (token for token in line.split() if token):
-        if not joined:
-            joined = token
-            continue
-        left = normalized(joined)
-        if (tag.fullmatch(left) or RANGE.fullmatch(left)) and not token.startswith('.'):
-            return line.strip(), True
-        joined += token
-    return joined, False
-
-def _notation_parts(raw, tag=None):
-    """Split a PE3 designator cell into ``(fragment, ambiguous)`` pairs.
-
-    Explicit separators ``;`` and ``,`` always start a new fragment.  A line
-    break between two complete designations is also a separator (``TA2`` newline
-    ``TA3``), while a line break inside a wrapped range continues it
-    (``1TA1...`` + ``1TA3`` or ``3TA1`` + ``...3TA3``).  A complete designation
-    followed by a non-continuation token on another line is kept ambiguous:
-    ``XT1`` + ``2`` must never invent ``XT1`` or ``XT12``.
-    """
-    tag = tag or current_tag()
-    parts = []
-    for chunk in re.split(r'[;,]', raw.replace('…', '...')):
-        stripped = chunk.strip()
-        if not stripped:
-            continue
-        pending = None
-        for line in re.split(r'\r?\n', stripped):
-            line = line.strip()
-            if not line:
-                continue
-            if pending is None:
-                pending = line
-                continue
-            first = line.split()[0]
-            if not _is_complete_notation(pending, tag) or first.startswith('.'):
-                pending += line
-                continue
-            if _is_complete_notation(first, tag):
-                fragment, ambiguous = _split_single_line(pending, tag)
-                parts.append((fragment, ambiguous))
-                pending = line
-                continue
-            # Complete designation followed by a non-continuation token on a
-            # new line: record the whole fragment as ambiguous, do not guess.
-            parts.append((pending + '\n' + line, True))
-            pending = None
-        if pending is not None:
-            parts.append(_split_single_line(pending, tag))
-    return parts
-
-def expand_notation(raw, tag=None):
-    """Universal group expansion: separators, wrapped ranges, line breaks.
-
-    Never invents values: ambiguous fragments are preserved in ``unknown``.
-    """
-    tag = tag or universal_reference_tag()
-    out, unknown = set(), []
-    for fragment, ambiguous in _notation_parts(raw, tag):
-        if ambiguous:
-            unknown.append(fragment)
-            continue
-        part = normalized(fragment)
-        if not part:
-            continue
-        m = RANGE.fullmatch(part)
-        if m:
-            left, first, right, last = m.groups()
-            if right and right != left or int(last) < int(first) or int(last) - int(first) > 100:
-                unknown.append(fragment)
-                continue
-            out.update(left + str(i) for i in range(int(first), int(last) + 1))
-            continue
-        if tag.fullmatch(part):
-            out.add(part)
-        else:
-            unknown.append(fragment)
-    return out, unknown
 
 def _designator_column(page, words):
     """Find the designator column from its header, with a safe fallback.
@@ -475,11 +384,19 @@ def _separated_by_rule(page, a, b):
                     return True
     return False
 
-def scheme_designations(page):
+def scheme_letter_designations(page, letter_candidates):
+    allowed_letters = {normalized(v) for v in letter_candidates if letter_designator(v)}
+    for word in page.get_text('words', sort=True):
+        if letter_designator(word[4]) and normalized(word[4]) in allowed_letters:
+            yield word[4]
+
+
+def scheme_designations(page, *, letter_candidates=()):
     """Recover only an incomplete prefix + numeric suffix in adjacent PDF lines.
     Standalone complete labels, different blocks, columns and pages stay separate.
     """
     yield from (m.group(0) for m in current_tag().finditer(page.get_text()))
+    yield from scheme_letter_designations(page, letter_candidates)
     # A range printed as one E3 token must contribute every member, not only
     # the endpoints found by the tag regex. The same grammar handles compound
     # semicolon lists without reference-class-specific rules.
@@ -591,7 +508,8 @@ def run(e3_filename, e3_bytes, pe_filename, pe_bytes, *, include_evidence=False)
             e3_word_count += len(words)
             for token in model_tokens(page.get_text()):
                 e3_model_pages[token].add(pi + 1)
-            page_values = list(islice(scheme_designations(page), MAX_SCHEME_DESIGNATIONS_PER_PAGE))
+            page_values = list(islice(chain(scheme_designations(page), scheme_letter_designations(page, spec)),
+                                      MAX_SCHEME_DESIGNATIONS_PER_PAGE))
             if len(page_values) >= MAX_SCHEME_DESIGNATIONS_PER_PAGE:
                 scheme_truncated = True
             matched_on_page = set()
@@ -631,8 +549,10 @@ def run(e3_filename, e3_bytes, pe_filename, pe_bytes, *, include_evidence=False)
         # by the semantic model (KD-EM-109-3), not by the legacy warning.
         _name = str(r.get('name') or '')
         _bulk = bool(_LENGTH_OR_BULK_UNITS_RE.search(_name))
+        from adapters import _classify_spec_row
+        semantic = _classify_spec_row(r, [], False)
         _role_ok = (not r['unknown'] and len(r['entries']) > 1
-                    and not _bulk)
+                    and not _bulk and semantic['row_role'] in ('standalone_device', 'grouped_position'))
         if not r['unknown'] and len(r['entries']) > 1 and len(r['entries']) != r['quantity'] and _role_ok:
             # The row number is evidence only when backed by PDF grid lines.
             # Unframed extraction retains page-only location without guessing.
@@ -673,7 +593,8 @@ def run(e3_filename, e3_bytes, pe_filename, pe_bytes, *, include_evidence=False)
         pe3_text_designations=pe3_text,
     ))
     findings.extend(confusable_findings(e3_filename, pe_filename, e3_model_pages, rows))
-    missing = sorted(spec - scheme)
+    scheme_bases = {base_designator(value) for value in scheme}
+    missing = sorted(value for value in spec if base_designator(value) not in scheme_bases)
     if missing:
         context = _unconfirmed_pe3_context(rows, missing[:8])
         findings.append(issue('info', 'KD-PE-101', pe_filename, 'Ограничения анализа', f'{len(missing)} обозначений ПЭ3 не подтверждены по извлечённому тексту Э3 (примеры: {", ".join(missing[:8])}).' + context + ' Это не считается ошибкой КД.', 'Для достоверной проверки использовать структурированный экспорт проекта EPLAN или проверить графику вручную'))
