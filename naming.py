@@ -65,6 +65,7 @@ def _notation_part(raw, tag=None):
 
 
 def expand_notation(raw, tag=None):
+    """Expand semicolon-delimited designations and explicit numeric ranges."""
     tag = tag or current_tag()
     out, unknown = set(), []
     for part in raw.split(';'):
@@ -74,15 +75,14 @@ def expand_notation(raw, tag=None):
             unknown.append(original.strip())
             continue
         if not part: continue
-        if '..' not in part:
-            if tag.fullmatch(part): out.add(part)
-            else: unknown.append(part)
-            continue
         m = RANGE.fullmatch(part)
-        if not m:
-            unknown.append(part); continue
-        left, first, right, last = m.groups()
-        if right and right != left or int(last)<int(first) or int(last)-int(first)>100:
-            unknown.append(part); continue
-        out.update(left+str(i) for i in range(int(first),int(last)+1))
+        if m:
+            left, first, right, last = m.groups()
+            if right and right != left or int(last)<int(first) or int(last)-int(first)>100:
+                unknown.append(part); continue
+            out.update(left+str(i) for i in range(int(first),int(last)+1))
+        elif tag.fullmatch(part):
+            out.add(part)
+        else:
+            unknown.append(part)
     return out, unknown

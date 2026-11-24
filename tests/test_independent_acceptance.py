@@ -314,17 +314,19 @@ def _e3_pdf(text):
 
 
 def _pe3_pdf(row_specs):
-    """Minimal grid-confirmed ПЭ3: designator column [0.09W,0.188W), 'кол'
-    header near 0.75W, horizontal rules crossing the designator column."""
+    """Minimal PE3 table using the same structural contract as bridge tests."""
     def build(page):
-        page.insert_text((435, 70), 'кол', fontname='DVSM', fontfile=_cyrillic_font(), fontsize=10)
-        y = 200
-        for designation, qty in row_specs:
-            page.draw_line((50, y), (120, y))
-            page.draw_line((50, y + 30), (120, y + 30))
-            page.insert_text((60, y + 13), f'{designation}\n{SPACES}{qty}',
-                             fontname='DVSM', fontfile=_cyrillic_font(), fontsize=10)
-            y += 60
+        for index in range(len(row_specs) + 1):
+            y = 70 + index * 50
+            page.draw_line((50, y), (480, y))
+        for x in (50, 115, 420, 455, 480):
+            page.draw_line((x, 70), (x, 70 + len(row_specs) * 50))
+        page.insert_text((60, 60), 'Poz.', fontsize=6)
+        page.insert_text((458, 60), 'Kol.', fontsize=6)
+        for index, (designation, qty) in enumerate(row_specs):
+            y = 70 + index * 50 + 18
+            page.insert_text((60, y), designation, fontsize=6)
+            page.insert_text((460, y), str(qty), fontsize=6)
     return _pdf(build)
 
 

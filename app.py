@@ -95,6 +95,7 @@ async def check(files: list[UploadFile] = File(...)):
     docs, errors, total = [], [], 0
     pdf_sources = []
     full_set_sources = []
+    engineering_sources = []
     for uploaded in files:
         name = Path((uploaded.filename or "").replace("\\", "/")).name
         ext = Path(name).suffix.lower()
@@ -107,6 +108,8 @@ async def check(files: list[UploadFile] = File(...)):
             raise HTTPException(413, "Превышен лимит: 20 МБ на файл, 100 МБ суммарно")
         try:
             docs.append(extract(name, content))
+            if ext in ('.pdf', '.xlsx'):
+                engineering_sources.append((name, content))
             if ext == ".pdf":
                 full_set_sources.append((name, content))
             if ext == ".pdf" and designation_type(name):
@@ -142,7 +145,8 @@ async def check(files: list[UploadFile] = File(...)):
     # All uploaded PDFs (including СП/ВО without designation-typed names) feed
     # the engineering model; designation-typed pairs alone would leave
     # document-reference checks (KD-EM-108-2) without any model to verify.
-    issues = apply_engineering_findings(issues, full_set_sources, load_cfg())
+    issues, extracted_entities = apply_engineering_findings(
+        issues, engineering_sources, load_cfg(), return_summary=True)
     for err in errors:
         issues.append({"severity":"error", "code":"KD-000", "file":err["file"], "location":"Загрузка", "message":err["message"], "recommendation":"Предоставьте корректный файл поддерживаемого формата"})
     # Every new check independently retrieves the current checklist when configured.
@@ -154,7 +158,7 @@ async def check(files: list[UploadFile] = File(...)):
     else:
         run_id = save_run(names, issues, checklist=checklist)
     summary = {k:sum(i["severity"] == k for i in issues) for k in ("error", "warning", "info")}
-    return {"id":run_id, "files":[{"name":d.name, "type":d.ext, "pages":d.pages, "sheets":len(d.sheets), "entities":d.entities} for d in docs], "issues":issues, "summary":summary, "checklist":checklist}
+    return {"id":run_id, "files":[{"name":d.name, "type":d.ext, "pages":d.pages, "sheets":len(d.sheets), "entities":d.entities} for d in docs], "issues":issues, "summary":summary, "extracted_entities":extracted_entities, "checklist":checklist}
 
 @app.get("/api/runs")
 def runs():

@@ -10,6 +10,7 @@ import re
 
 from engine import issue
 from naming import normalized
+from connection_checks import Connection, Endpoint
 
 MAX_EXAMPLES = 8
 
@@ -22,6 +23,28 @@ CODE_COUNT = 'KD-EM-110-3'
 _LENGTH_UNITS = re.compile(
     r'(?<![0-9A-Za-zА-Яа-яЁё])(мм|км|м|mm|km|m)(?![0-9A-Za-zА-Яа-яЁё])',
     re.IGNORECASE)
+
+
+def connections_from_rows(rows, *, document, sheet='', project='', revision='') -> list:
+    """Map validated, header-normalized workbook rows to graph connections."""
+    records = []
+    for index, row in enumerate(rows, 2):
+        required = ('source_device', 'source_terminal', 'target_device',
+                    'target_terminal', 'wire')
+        if not all(str(row.get(key, '') or '').strip() for key in required):
+            continue
+        location = f'{sheet}, строка {index}' if sheet else f'строка {index}'
+        records.append(Connection(
+            project=str(row.get('project') or project or document),
+            revision=str(row.get('revision') or revision or 'не указана'),
+            wire=str(row['wire']).strip(), cable=str(row.get('cable') or '').strip(),
+            source=Endpoint(device=str(row['source_device']).strip(),
+                            terminal=str(row['source_terminal']).strip()),
+            target=Endpoint(device=str(row['target_device']).strip(),
+                            terminal=str(row['target_terminal']).strip()),
+            document=document, location=location,
+        ))
+    return records
 
 
 def _node_key(endpoint) -> tuple:
