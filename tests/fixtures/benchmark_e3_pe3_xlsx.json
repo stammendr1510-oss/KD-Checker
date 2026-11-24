@@ -1,0 +1,157 @@
+{
+  "expected_devices": [
+    "BL1",
+    "GX1",
+    "MK0",
+    "MK1",
+    "MK2",
+    "MK3",
+    "MK4",
+    "P1",
+    "P2",
+    "P3",
+    "Q",
+    "VR1"
+  ],
+  "expected_pe3_rows": [
+    {
+      "designation": "VR1",
+      "name": "Relay",
+      "quantity": 1
+    },
+    {
+      "designation": "BL1",
+      "name": "Distribution block",
+      "quantity": 1
+    },
+    {
+      "designation": "GX1",
+      "name": "Multi-core cable",
+      "quantity": 1
+    },
+    {
+      "designation": "MK0...MK4",
+      "name": "Terminal block",
+      "quantity": 5
+    },
+    {
+      "designation": "P1...P3;Q",
+      "name": "Module",
+      "quantity": 4
+    }
+  ],
+  "expected_connections": [
+    {
+      "source": "VR1:1",
+      "target": "MK0:1",
+      "wire": "W1",
+      "cable": "GX1",
+      "bus_or_block_ref": "",
+      "color": "Blue",
+      "cross_section": "1.5",
+      "wire_type": "H07V"
+    },
+    {
+      "source": "VR1:1",
+      "target": "MK1:1",
+      "wire": "W2",
+      "cable": "",
+      "bus_or_block_ref": "BL1",
+      "color": "Red",
+      "cross_section": "2.5",
+      "wire_type": "H07V"
+    },
+    {
+      "source": "MK0:1",
+      "target": "MK2:1",
+      "wire": "W3",
+      "cable": "",
+      "bus_or_block_ref": "MK0",
+      "color": "Black",
+      "cross_section": "1.5",
+      "wire_type": "H07V"
+    }
+  ],
+  "expected_defects": [
+    {
+      "canonical_type": "terminal_conflict",
+      "target_entity": "VR1:1",
+      "min_severity": "WARNING"
+    }
+  ],
+  "forbidden_false_positives": [
+    {
+      "canonical_type": "terminal_conflict",
+      "target_entity": "MK0:1"
+    },
+    {
+      "canonical_type": "scheme_pe3_mismatch",
+      "target_entity": "scheme_to_spec:Q"
+    }
+  ],
+  "input": {
+    "spec": [
+      [
+        "VR1",
+        "Relay",
+        1
+      ],
+      [
+        "BL1",
+        "Distribution block",
+        1
+      ],
+      [
+        "GX1",
+        "Multi-core cable",
+        1
+      ],
+      [
+        "MK0...MK4",
+        "Terminal block",
+        5
+      ],
+      [
+        "P1...P3;Q",
+        "Module",
+        4
+      ]
+    ],
+    "wires": [
+      [
+        "VR1",
+        "1",
+        "MK0",
+        "1",
+        "W1",
+        "GX1",
+        "Blue",
+        "1.5",
+        "H07V"
+      ],
+      [
+        "VR1",
+        "1",
+        "MK1",
+        "1",
+        "W2",
+        "BL1",
+        "Red",
+        "2.5",
+        "H07V"
+      ],
+      [
+        "MK0",
+        "1",
+        "MK2",
+        "1",
+        "W3",
+        "MK0",
+        "Black",
+        "1.5",
+        "H07V"
+      ]
+    ],
+    "scheme": "VR1 BL1 GX1 MK0 MK1 MK2 MK3 MK4 P1...P3;Q"
+  }
+}
