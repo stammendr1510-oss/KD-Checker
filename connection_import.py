@@ -5,7 +5,7 @@ import json
 import re
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
-from connection_checks import Connection, Endpoint, check_connections
+from connection_checks import Connection, Endpoint, check_connections, is_potential
 
 Text = Annotated[str, StringConstraints(strict=True, min_length=1, max_length=500)]
 
@@ -191,7 +191,15 @@ def classify_connection_row(row):
     if row.get('_header_ambiguous'):
         return 'ambiguous', 'Повторяющиеся столбцы не имеют однозначной роли'
     keys = ('source_device', 'source_terminal', 'target_device', 'target_terminal', 'wire')
-    missing = [key for key in keys if not str(row.get(key) if row.get(key) is not None else '').strip()]
+    def cell(key):
+        value = row.get(key)
+        return str(value if value is not None else '').strip()
+
+    missing = [key for key in keys if not cell(key)]
+    for side in ('source', 'target'):
+        terminal = side + '_terminal'
+        if terminal in missing and is_potential(cell(side + '_device')):
+            missing.remove(terminal)
     if missing:
         labels = dict(source_device='источник', source_terminal='контакт источника',
                       target_device='назначение', target_terminal='контакт назначения', wire='маркировка соединения')

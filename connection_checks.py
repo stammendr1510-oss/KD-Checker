@@ -1,6 +1,9 @@
 """Opt-in checks of explicit structured connections; never infer PDF topology."""
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
+import re
 import unicodedata
+
+from naming import normalized
 
 from engine import issue
 
@@ -14,14 +17,30 @@ def _text(value, *, optional=False):
     return value
 
 
+def is_potential(device: str, terminal: str = '') -> bool:
+    """Recognize standalone conventional bus names, never numbered contacts."""
+    if terminal.strip():
+        return False
+    label = normalized(device)
+    return bool(re.fullmatch(r'(?:PE|N|PEN|GND|L[123]|[+-]?\d+(?:[.,]\d+)?V(?:DC|AC)?)', label))
+
+
 @dataclass(frozen=True)
 class Endpoint:
     device: str
     terminal: str
 
     def __post_init__(self):
-        for field in fields(self):
-            object.__setattr__(self, field.name, _text(getattr(self, field.name)))
+        device = _text(self.device)
+        terminal = _text(self.terminal, optional=True)
+        if not terminal and not is_potential(device):
+            raise ValueError('Explicit terminal required for device endpoint')
+        object.__setattr__(self, 'device', device)
+        object.__setattr__(self, 'terminal', terminal)
+
+    @property
+    def kind(self) -> str:
+        return 'potential' if is_potential(self.device, self.terminal) else 'terminal'
 
 
 @dataclass(frozen=True)
@@ -59,7 +78,7 @@ def check_connections(records):
         if occurrence in occurrences:
             continue
         occurrences.add(occurrence)
-        if record.source == record.target:
+        if record.source == record.target and record.source.kind != 'potential':
             out.append(issue('info', 'KD-CON-102', record.document, record.location,
                 f'Источник и приёмник записи совпадают: {record.source.device}:{record.source.terminal}',
                 'Проверьте структурированный экспорт и назначение соединения; электрическая ошибка не подтверждена'))
