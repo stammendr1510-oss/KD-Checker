@@ -11,7 +11,7 @@ from engineering_classifier import classify_object, split_cable_reference
 
 from connection_checks import Connection
 from engine import issue
-from naming import CYR_LOOKALIKES, current_tag, normalized, base_designator
+from naming import CYR_LOOKALIKES, current_tag, normalized, base_designator, coverage_keys
 
 
 # --- Universal product-attribute signatures (KD-PE-112) ----------------------
@@ -198,6 +198,8 @@ class EngineeringModel:
                                        parent_ref=row.parent_ref, role=row.row_role)
                 if kind and (kind != 'device' or des.normalized not in kinds):
                     kinds[des.normalized] = kind
+                if kind in ('terminal_assembly', 'potential_bus'):
+                    kinds[base_designator(des.normalized)] = kind
         return kinds
 
     def reconcile_connection_groups(self):
@@ -312,11 +314,18 @@ def verify_endpoint_conflicts(model: EngineeringModel) -> list[dict]:
     """EM-109-1: one (device, terminal) endpoint claimed by different wires."""
     from naming import normalized as _norm
     claims: dict = {}
+    kinds = model.object_kinds()
     for record in model.connections:
         for end in (record.source, record.target):
-            if end.kind == 'potential':
+            device = _norm(end.device)
+            kind = kinds.get(device)
+            parent_kind = kinds.get(base_designator(device))
+            if (end.kind == 'potential' or kind in ('terminal_assembly', 'potential_bus')
+                    or parent_kind in ('terminal_assembly', 'potential_bus')):
                 continue
-            key = (_norm(end.device), _norm(end.terminal))
+            if kind != 'device' or not end.terminal:
+                continue
+            key = (device, _norm(end.terminal))
             claims.setdefault(key, []).append(record)
     out = []
     for (device, terminal), records in sorted(claims.items()):
@@ -345,7 +354,7 @@ def verify_coverage(model: EngineeringModel) -> list[dict]:
                     if r.row_role not in ('accessory', 'assembly_element')
                     and r.quantity_semantics != 'length_or_bulk'}
     def keys(value):
-        return {normalized(value), base_designator(value)}
+        return coverage_keys(value)
 
     matched_scheme = {value for value in scheme_devices
                       if any(keys(value) & keys(other) for other in spec_devices)}
