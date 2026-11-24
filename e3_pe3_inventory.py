@@ -12,7 +12,7 @@ import math
 import re
 
 from kd_crosscheck import MAX_PDF_PAGES, designation_type, normalized, pair_key
-from naming import current_tag, expand_notation
+from naming import current_tag, expand_notation, base_designator
 from identifier_classification import (
     AMBIGUOUS,
     CONNECTION_REFERENCE,
@@ -223,11 +223,7 @@ def group_of(designation):
 
 
 def base_of(designation):
-    value = normalized(designation)
-    match = re.fullmatch(r"(.+)\.(\d+)", value)
-    if match and current_tag().fullmatch(match.group(1)):
-        return match.group(1)
-    return value
+    return base_designator(designation)
 
 
 def matching_keys(designation):

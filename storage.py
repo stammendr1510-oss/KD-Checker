@@ -121,6 +121,10 @@ def connect():
 
 
 def save_run(names, issues, checklist=None, *, extracted_entities=None, app_metadata=None):
+    """Snapshot findings and per-document completeness together, including reasons.
+
+    Historical extraction statistics and build identity are never recomputed on read.
+    """
     with closing(connect()) as con, con:
         con.execute('BEGIN IMMEDIATE')
         cur = con.execute('INSERT INTO runs(created_at,filenames,issues) VALUES(?,?,?)',

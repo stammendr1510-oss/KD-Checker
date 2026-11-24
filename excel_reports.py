@@ -68,7 +68,14 @@ def build_excel_report(run):
     for index, item in enumerate(run['issues'], 1):
         label, color = LEVELS.get(item['severity'], (item['severity'], 'FFFFFF'))
         findings.append([index])
-        values = [label] + [item.get(key, '') for key in ('code', 'file', 'location', 'message', 'recommendation')]
+        values = [label] + [(', '.join(item.get('related_codes', [item.get('code', '')]))
+                            if key == 'code' else '; '.join(
+                                ref.get('location') or ', '.join(str(v) for v in
+                                (ref.get('document'), 'лист '+str(ref['page']) if ref.get('page') else None,
+                                 'строка '+str(ref['row']) if ref.get('row') else None) if v)
+                                for ref in item['source_refs'])
+                            if key == 'location' and item.get('source_refs') else item.get(key, ''))
+                           for key in ('code', 'file', 'location', 'message', 'recommendation')]
         state = states.get(index-1, {})
         values += [STATUS_LABELS.get(state.get('status', 'new'), 'Новое'),
                    state.get('comment', ''), state.get('updated_at') or '']
@@ -127,6 +134,24 @@ def build_excel_report(run):
                     _text(observed.cell(observed.max_row, column), row.get(key, ''))
         _format_sheet(observed, [34, 24, 14, 28, 28, 20, 20, 20, 20],
                       header_rows=tuple(header_rows))
+
+    documents = (extraction or {}).get('documents', [])
+    if documents:
+        completeness = workbook.create_sheet('Полнота извлечения')
+        completeness.append(['Документ', 'Тип', 'Парсер', 'Исходных строк', 'Извлечено',
+                             'Неполных', 'Неоднозначных', 'Отклонено', 'Причины',
+                             'Применимые проверки', 'Пропущенные проверки', 'Ограничения'])
+        for document in documents:
+            values = [document.get(k) for k in ('document', 'detected_type', 'parser', 'raw_rows',
+                       'extracted', 'incomplete', 'ambiguous', 'rejected')]
+            values += ['; '.join(f"{r.get('sheet', '')} строка {r.get('row')}: {r['reason']}"
+                                for r in document.get('reasons', []))]
+            values += ['; '.join(document.get(k, [])) for k in
+                       ('applicable_checks', 'skipped_checks', 'confidence_limits')]
+            completeness.append([None] * len(values))
+            for column, value in enumerate(values, 1):
+                _text(completeness.cell(completeness.max_row, column), value if value is not None else 'Не определено')
+        _format_sheet(completeness, [35, 25, 35, 18, 15, 15, 18, 15, 80, 50, 50, 80])
 
     checklist = run.get('checklist')
     if checklist is not None:

@@ -21,14 +21,17 @@ HEADER_ALIASES = {
     'format': (r'^(?:формат|format)$',),
     'zone': (r'^(?:зона|zone)$',),
     'document_ref': (r'^(?:документ|обозначение документа|document|document reference)$',),
-    'source_device': (r'^(?:устройство источника|начальное устройство|source device|from device)$',),
+    'source_device': (r'^(?:устройство источника|начальное устройство|source device|from device|откуда)$',),
     'source_terminal': (r'^(?:контакт источника|начальный контакт|source terminal|from terminal)$',),
-    'target_device': (r'^(?:устройство назначения|конечное устройство|target device|to device)$',),
+    'target_device': (r'^(?:устройство назначения|конечное устройство|target device|to device|куда)$',),
     'target_terminal': (r'^(?:контакт назначения|конечный контакт|target terminal|to terminal)$',),
-    'wire': (r'^(?:провод|маркировка провода|wire|wire mark)$',),
-    'cable': (r'^(?:кабель|cable)$',),
+    'wire': (r'^(?:провод|маркировка провода|wire|wire mark|соединение)$',),
+    'cable': (r'^(?:кабель|наименование кабеля|cable)$',),
     'color': (r'^(?:цвет|цвет провода|wire colou?r|colou?r)$',),
-    'cross_section': (r'^(?:сечение|сечение провода|площадь сечения|cross[ -]?section|wire size|area)$',),
+    'cross_section': (r'^(?:сечение|поперечное сечение|сечение провода|площадь сечения|cross[ -]?section|wire size|area)$',),
+    'contact': (r'^номер контакта$',),
+    'wire_type': (r'^тип провода$',),
+    'sheet_number': (r'^лист\s*№$',),
     'project': (r'^(?:проект|project)$',),
     'revision': (r'^(?:ревизия|версия|revision)$',),
 }
@@ -45,6 +48,7 @@ class RoutedSheet:
     role: str
     header_row: int | None
     records: tuple[dict, ...]
+    limits: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -66,7 +70,7 @@ def normalize_header(value):
 
 def _route_role(keys):
     keys = set(keys)
-    if CONNECTION_KEYS <= keys:
+    if {'source_device', 'target_device'} <= keys:
         return 'connections'
     if 'document_ref' in keys:
         return 'sp'
@@ -87,6 +91,15 @@ def _route_sheet(sheet):
     for header_index, row in enumerate(values[:20]):
         columns = {index: normalize_header(value) for index, value in enumerate(row)}
         columns = {index: key for index, key in columns.items() if key}
+        # Assign duplicate contacts by the preceding endpoint column, never by name.
+        endpoint = None
+        for index in sorted(columns):
+            key = columns[index]
+            if key in ('source_device', 'target_device'):
+                endpoint = key.split('_')[0]
+            elif key == 'contact' and endpoint:
+                columns[index] = endpoint + '_terminal'
+        duplicates = len(columns.values()) != len(set(columns.values()))
         role = _route_role(columns.values())
         if role == 'unknown':
             continue
@@ -96,11 +109,17 @@ def _route_sheet(sheet):
                       for index, key in columns.items()}
             if role == 'pe3' and 'designation' not in record and 'position' in record:
                 record['designation'] = record['position']
-            if any(value not in (None, '') for value in record.values()):
+            if any(value not in (None, '') for value in source):
                 record['_row_number'] = row_number
+                if duplicates:
+                    record['_header_ambiguous'] = True
                 records.append(record)
-        return RoutedSheet(sheet.title, role, header_index + 1, tuple(records))
-    return RoutedSheet(sheet.title, 'unknown', None, ())
+        return RoutedSheet(sheet.title, role, header_index + 1, tuple(records),
+                           ('Достигнут предел строк или столбцов',) if
+                           sheet.max_row > MAX_XLSX_ROWS or sheet.max_column > MAX_XLSX_COLUMNS else ())
+    return RoutedSheet(sheet.title, 'unknown', None, tuple(
+        {'_row_number': i, '_unrecognized': True} for i, row in enumerate(values, 1)
+        if any(v not in (None, '') for v in row)), ('Заголовки таблицы не распознаны',))
 
 
 def route_xlsx(content: bytes) -> RoutedWorkbook:
@@ -165,3 +184,23 @@ def parse_connections(raw):
         return payload, files, check_connections(records)
     except (UnicodeError, RecursionError) as exc:
         raise ValueError('Invalid structured input') from None
+
+
+def classify_connection_row(row):
+    """Return a complete accounting result; never fabricate contacts/wire IDs."""
+    if row.get('_header_ambiguous'):
+        return 'ambiguous', 'Повторяющиеся столбцы не имеют однозначной роли'
+    keys = ('source_device', 'source_terminal', 'target_device', 'target_terminal', 'wire')
+    missing = [key for key in keys if not str(row.get(key) if row.get(key) is not None else '').strip()]
+    if missing:
+        labels = dict(source_device='источник', source_terminal='контакт источника',
+                      target_device='назначение', target_terminal='контакт назначения', wire='маркировка соединения')
+        return 'incomplete', 'Не заполнены: ' + ', '.join(labels[key] for key in missing)
+    import unicodedata
+    for key in keys + ('cable', 'project', 'revision'):
+        value = str(row.get(key) or '').strip()
+        if len(value) > 500 or any(unicodedata.category(c).startswith('C') for c in value):
+            return 'rejected', 'Недопустимая длина или управляющие символы в ячейке'
+        if key.endswith('_device') and any(c in value for c in ';,\n'):
+            return 'ambiguous', 'Несколько конечных точек в одной ячейке'
+    return 'extracted', 'Оба конца и маркировка соединения заполнены'

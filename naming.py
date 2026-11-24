@@ -70,25 +70,109 @@ def _notation_part(raw, tag=None):
     return normalized(joined)
 
 
-def expand_notation(raw, tag=None):
-    """Expand semicolon-delimited designations and explicit numeric ranges."""
+def _is_complete_notation(text, tag=None):
+    value = normalized(text)
     tag = tag or current_tag()
-    out, unknown = set(), []
-    for part in raw.split(';'):
-        original = part
-        part = _notation_part(part, tag)
-        if part is None:
-            unknown.append(original.strip())
+    return bool(tag.fullmatch(value) or RANGE.fullmatch(value) or letter_designator(text))
+
+def _split_single_line(line, tag=None):
+    """Split tokens of one physical line, preserving the legacy ambiguity rule.
+
+    A complete designation followed by another token on the *same* line is
+    ambiguous (``XT1 2`` must not become ``XT1`` or ``XT12``).  A wrapped range
+    such as ``1TA1... 1TA3`` is joined because the first token is incomplete.
+    """
+    tag = tag or current_tag()
+    joined = ''
+    for token in (token for token in line.split() if token):
+        if not joined:
+            joined = token
             continue
-        if not part: continue
+        left = normalized(joined)
+        if (tag.fullmatch(left) or RANGE.fullmatch(left)) and not token.startswith('.'):
+            return line.strip(), True
+        joined += token
+    return joined, False
+
+def _notation_parts(raw, tag=None):
+    """Split a PE3 designator cell into ``(fragment, ambiguous)`` pairs.
+
+    Explicit separators ``;`` and ``,`` always start a new fragment.  A line
+    break between two complete designations is also a separator (``TA2`` newline
+    ``TA3``), while a line break inside a wrapped range continues it
+    (``1TA1...`` + ``1TA3`` or ``3TA1`` + ``...3TA3``).  A complete designation
+    followed by a non-continuation token on another line is kept ambiguous:
+    ``XT1`` + ``2`` must never invent ``XT1`` or ``XT12``.
+    """
+    tag = tag or current_tag()
+    parts = []
+    for chunk in re.split(r'[;,]', raw.replace('…', '...')):
+        stripped = chunk.strip()
+        if not stripped:
+            continue
+        pending = None
+        for line in re.split(r'\r?\n', stripped):
+            line = line.strip()
+            if not line:
+                continue
+            if pending is None:
+                pending = line
+                continue
+            first = line.split()[0]
+            if letter_designator(pending) and re.fullmatch(r'\d+(?:\.\d+)?', line):
+                pending += line
+                continue
+            if not _is_complete_notation(pending, tag) or first.startswith('.'):
+                pending += line
+                continue
+            if _is_complete_notation(first, tag):
+                fragment, ambiguous = _split_single_line(pending, tag)
+                parts.append((fragment, ambiguous))
+                pending = line
+                continue
+            # Complete designation followed by a non-continuation token on a
+            # new line: record the whole fragment as ambiguous, do not guess.
+            parts.append((pending + '\n' + line, True))
+            pending = None
+        if pending is not None:
+            parts.append(_split_single_line(pending, tag))
+    return parts
+
+def expand_notation(raw, tag=None):
+    """Universal group expansion: separators, wrapped ranges, line breaks.
+
+    Never invents values: ambiguous fragments are preserved in ``unknown``.
+    """
+    tag = tag or universal_reference_tag()
+    out, unknown = set(), []
+    for fragment, ambiguous in _notation_parts(raw, tag):
+        if ambiguous:
+            unknown.append(fragment)
+            continue
+        part = normalized(fragment)
+        if not part:
+            continue
         m = RANGE.fullmatch(part)
         if m:
             left, first, right, last = m.groups()
-            if right and right != left or int(last)<int(first) or int(last)-int(first)>100:
-                unknown.append(part); continue
-            out.update(left+str(i) for i in range(int(first),int(last)+1))
-        elif tag.fullmatch(part):
+            if right and right != left or int(last) < int(first) or int(last) - int(first) > 100:
+                unknown.append(fragment)
+                continue
+            out.update(left + str(i) for i in range(int(first), int(last) + 1))
+            continue
+        if tag.fullmatch(part) or (letter_designator(fragment) and not re.search(r'\d', raw)):
             out.add(part)
         else:
-            unknown.append(part)
+            unknown.append(fragment)
     return out, unknown
+
+
+def letter_designator(value):
+    """Letters are accepted only as an explicit uppercase cell fragment."""
+    return bool(re.fullmatch(r'[A-ZА-ЯЁ]{1,12}', value.strip()))
+
+
+def base_designator(value):
+    value = normalized(value)
+    match = re.fullmatch(r'(.+)\.\d+', value)
+    return match.group(1) if match and universal_reference_tag().fullmatch(match.group(1)) else value
