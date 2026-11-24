@@ -25,11 +25,11 @@ _LENGTH_UNITS = re.compile(
     re.IGNORECASE)
 
 
-def connections_from_rows(rows, *, document, sheet='', project='', revision='') -> list:
+def connections_from_rows(rows, *, document, sheet='', project='', revision='', known_kinds=None) -> list:
     """Map validated, header-normalized workbook rows to graph connections."""
     records = []
     for index, row in enumerate(rows, 2):
-        from connection_import import classify_connection_row
+        from connection_import import classify_connection_row, connection_metadata
         status, _reason = classify_connection_row(row)
         if status != 'extracted':
             continue
@@ -38,7 +38,8 @@ def connections_from_rows(rows, *, document, sheet='', project='', revision='') 
         records.append(Connection(
             project=str(row.get('project') or project or document),
             revision=str(row.get('revision') or revision or 'не указана'),
-            wire=str(row['wire']).strip(), cable=str(row.get('cable') or '').strip(),
+            wire=str(row['wire']).strip(),
+            **connection_metadata(row, known_kinds),
             source=Endpoint(device=str(row['source_device']).strip(),
                             terminal=str(row.get('source_terminal') if row.get('source_terminal') is not None else '').strip()),
             target=Endpoint(device=str(row['target_device']).strip(),
