@@ -22,6 +22,7 @@ from naming import (  # noqa: F401
     current_tag,
     normalized,
     reference_tag,
+    universal_reference_tag,
 )
 
 MAX_PDF_PAGES = 100
@@ -118,7 +119,7 @@ def expand_notation(raw, tag=None):
 
     Never invents values: ambiguous fragments are preserved in ``unknown``.
     """
-    tag = tag or current_tag()
+    tag = tag or universal_reference_tag()
     out, unknown = set(), []
     for fragment, ambiguous in _notation_parts(raw, tag):
         if ambiguous:

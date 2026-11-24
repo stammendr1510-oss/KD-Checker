@@ -120,7 +120,7 @@ def connect():
     return con
 
 
-def save_run(names, issues, checklist=None):
+def save_run(names, issues, checklist=None, *, extracted_entities=None, app_metadata=None):
     with closing(connect()) as con, con:
         con.execute('BEGIN IMMEDIATE')
         cur = con.execute('INSERT INTO runs(created_at,filenames,issues) VALUES(?,?,?)',
@@ -135,6 +135,18 @@ def save_run(names, issues, checklist=None):
             )""")
             con.execute("INSERT INTO checklist_run_snapshots(run_id,snapshot) VALUES(?,?)",
                         (run_id, json.dumps(checklist, ensure_ascii=False)))
+        if extracted_entities is not None or app_metadata is not None:
+            con.execute("""CREATE TABLE IF NOT EXISTS run_observability(
+                run_id INTEGER PRIMARY KEY REFERENCES runs(id),
+                extracted_entities TEXT NOT NULL,
+                app_metadata TEXT NOT NULL
+            )""")
+            con.execute("""INSERT INTO run_observability
+                (run_id,extracted_entities,app_metadata) VALUES(?,?,?)""", (
+                run_id,
+                json.dumps(extracted_entities or {}, ensure_ascii=False),
+                json.dumps(app_metadata or {}, ensure_ascii=False),
+            ))
         return run_id
 
 
@@ -167,9 +179,19 @@ def get_run(run_id):
             "reason": "При этой проверке снимок EPLAN Checklist не был сохранён",
             "revision": None, "retrieved_at": None, "items": [], "reviews": [],
         })
+        observability_exists = con.execute("""SELECT 1 FROM sqlite_master
+            WHERE type='table' AND name='run_observability'""").fetchone()
+        observability = (con.execute(
+            "SELECT extracted_entities,app_metadata FROM run_observability WHERE run_id=?",
+            (run_id,),
+        ).fetchone() if observability_exists else None)
         return {'id': row['id'], 'created_at': row['created_at'], 'files': json.loads(row['filenames']),
                 'issues': json.loads(row['issues']), 'finding_states': _states(con, run_id),
-                'checklist': checklist}
+                'checklist': checklist,
+                'extracted_entities': (json.loads(observability['extracted_entities'])
+                                       if observability else {}),
+                'app_metadata': (json.loads(observability['app_metadata'])
+                                 if observability else {})}
 
 
 def list_runs():

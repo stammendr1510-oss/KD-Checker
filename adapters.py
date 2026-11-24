@@ -11,10 +11,12 @@ from engineering_model import (
     run_universal_verifiers, run_verifiers,
 )
 from engineering_graph import connections_from_rows, run_graph_verifiers
+from connection_import import RoutedWorkbook, route_xlsx
 from full_set_completeness import specification_references
-from kd_crosscheck import designation_type, get_spec_rows, pair_key, scheme_designations
+from kd_crosscheck import (designation_type, expand_notation, get_spec_rows,
+                           pair_key, scheme_designations)
 from confusable_designations import model_tokens
-from naming import current_tag, expand_notation, normalized
+from naming import normalized, universal_reference_tag
 import fitz
 import re
 
@@ -175,93 +177,46 @@ def attach_connections(records, model: EngineeringModel) -> EngineeringModel:
     return model
 
 
-_HEADER_ALIASES = {
-    'designation': (r'^(?:поз(?:иция)?|обозначение|designat(?:ion|or)|reference)$',),
-    'quantity': (r'^(?:кол(?:ичество)?|qty|quantity|count)$',),
-    'name': (r'^(?:наименование|описание|name|description)$',),
-    'document_ref': (r'^(?:документ|обозначение документа|document|document reference)$',),
-    'source_device': (r'^(?:устройство источника|начальное устройство|source device|from device)$',),
-    'source_terminal': (r'^(?:контакт источника|начальный контакт|source terminal|from terminal)$',),
-    'target_device': (r'^(?:устройство назначения|конечное устройство|target device|to device)$',),
-    'target_terminal': (r'^(?:контакт назначения|конечный контакт|target terminal|to terminal)$',),
-    'wire': (r'^(?:провод|маркировка провода|wire|wire mark)$',),
-    'cable': (r'^(?:кабель|cable)$',),
-    'project': (r'^(?:проект|project)$',),
-    'revision': (r'^(?:ревизия|версия|revision)$',),
-}
-
-
-def _header_key(value):
-    text = re.sub(r'\s+', ' ', str(value or '').replace('\n', ' ')).strip().casefold()
-    for key, patterns in _HEADER_ALIASES.items():
-        if any(re.fullmatch(pattern, text, re.I) for pattern in patterns):
-            return key
-    return None
-
-
-def _sheet_records(sheet):
-    values = list(sheet.iter_rows(values_only=True))
-    for header_index, row in enumerate(values[:20]):
-        columns = {index: _header_key(value) for index, value in enumerate(row)}
-        columns = {index: key for index, key in columns.items() if key}
-        if len(columns) < 2 and set(columns.values()) != {'document_ref'}:
-            continue
-        records = []
-        for source in values[header_index + 1:]:
-            record = {key: source[index] if index < len(source) else None
-                      for index, key in columns.items()}
-            if any(value not in (None, '') for value in record.values()):
-                records.append(record)
-        return header_index + 1, records
-    return None, []
-
-
 def model_from_xlsx(content: bytes, filename: str,
-                    model: EngineeringModel | None = None) -> EngineeringModel:
+                    model: EngineeringModel | None = None,
+                    routed: RoutedWorkbook | None = None) -> EngineeringModel:
     """Map header-driven XLSX tables into model entities without filename rules."""
-    from io import BytesIO
-    from openpyxl import load_workbook
-
     model = model or EngineeringModel()
-    workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
-    try:
-        for sheet in workbook.worksheets:
-            header_row, records = _sheet_records(sheet)
-            if not records:
-                continue
-            keys = set().union(*(record.keys() for record in records))
-            connection_keys = {'source_device', 'source_terminal', 'target_device',
-                               'target_terminal', 'wire'}
-            if connection_keys <= keys:
-                model.connections.extend(connections_from_rows(
-                    records, document=filename, sheet=sheet.title))
-                continue
-            if {'designation', 'quantity'} <= keys:
-                rows = []
-                for offset, record in enumerate(records, (header_row or 1) + 1):
-                    raw = re.sub(r'\s+', ' ', str(record.get('designation') or '')).strip()
-                    entries, unknown = expand_notation(raw)
-                    try:
-                        quantity = int(record.get('quantity'))
-                    except (TypeError, ValueError):
-                        quantity = None
-                    rows.append({
-                        'source': raw, 'entries': entries, 'unknown': unknown,
-                        'quantity': quantity, 'name': re.sub(r'\s+', ' ', str(record.get('name') or '')).strip(),
-                        'page': None, 'table_row': offset, 'row_band': (float(offset), float(offset + 1)),
-                    })
-                model_from_spec_rows(rows, filename, model)
-                continue
-            if 'document_ref' in keys:
-                for offset, record in enumerate(records, (header_row or 1) + 1):
-                    raw = re.sub(r'\s+', ' ', str(record.get('document_ref') or '')).strip()
-                    kind = designation_type(raw) or designation_type(raw + '.pdf')
-                    if kind:
-                        model.document_refs.append(DocumentRef(
-                            kind=kind, key=pair_key(raw), raw=raw,
-                            provenance=source_ref(filename, row=offset)))
-    finally:
-        workbook.close()
+    routed = routed or route_xlsx(content)
+    for sheet in routed.sheets:
+        records = sheet.records
+        if not records:
+            continue
+        if sheet.role == 'connections':
+            model.connections.extend(connections_from_rows(
+                records, document=filename, sheet=sheet.name))
+            continue
+        if sheet.role == 'pe3':
+            rows = []
+            for record in records:
+                raw = str(record.get('designation') or '').strip()
+                entries, unknown = expand_notation(raw)
+                try:
+                    quantity = int(record.get('quantity'))
+                except (TypeError, ValueError):
+                    quantity = None
+                rows.append({
+                    'source': raw, 'entries': entries, 'unknown': unknown,
+                    'quantity': quantity, 'name': re.sub(r'\s+', ' ', str(record.get('name') or '')).strip(),
+                    'page': None, 'table_row': record['_row_number'],
+                    'row_band': (float(record['_row_number']), float(record['_row_number'] + 1)),
+                })
+            model_from_spec_rows(rows, filename, model)
+            continue
+        if sheet.role == 'sp':
+            for record in records:
+                raw = re.sub(r'\s+', ' ', str(record.get('document_ref')
+                                                or record.get('designation') or '')).strip()
+                kind = designation_type(raw) or designation_type(raw + '.pdf')
+                if kind:
+                    model.document_refs.append(DocumentRef(
+                        kind=kind, key=pair_key(raw), raw=raw,
+                        provenance=source_ref(filename, row=record['_row_number'])))
     return model
 
 
@@ -274,14 +229,16 @@ def build_model(pdf_sources, names=None) -> EngineeringModel:
     """
     model = EngineeringModel()
     diagnostics = []
-    names = names if names is not None else [n for n, _ in pdf_sources]
+    sources = [_source_parts(item) for item in pdf_sources]
+    source_content = {name: content for name, content, _routed in sources}
+    names = names if names is not None else [name for name, _content, _routed in sources]
     attach_upload_identities(names, model)
     parsed_counts = {}
-    for name, content in pdf_sources:
+    for name, content, routed in sources:
         if _Path(name).suffix.casefold() == '.xlsx':
             before = (len(model.spec_rows), len(model.document_refs), len(model.connections))
             try:
-                model_from_xlsx(content, name, model)
+                model_from_xlsx(content, name, model, routed=routed)
             except Exception as exc:  # noqa: BLE001
                 diagnostics.append(_em000('извлечение XLSX', name, exc))
             parsed_counts[name] = sum((len(model.spec_rows) - before[0],
@@ -318,7 +275,7 @@ def build_model(pdf_sources, names=None) -> EngineeringModel:
                 '(строк, обозначений или ссылок); замечания KD-EM по этому '
                 'документу неполные. Это ограничение инструмента, а не ошибка КД.',
                 ('Проверьте наличие текстового слоя или выполните OCR.'
-                 if _Path(name).suffix.casefold() == '.pdf' and not _pdf_has_text(dict(pdf_sources).get(name, b''))
+                 if _Path(name).suffix.casefold() == '.pdf' and not _pdf_has_text(source_content.get(name, b''))
                  else 'Текстовый слой доступен. Проверьте заголовки столбцов, границы строк, '
                       'ячейки обозначений и якоря количества; при необходимости используйте '
                       'структурированную выгрузку.'),
@@ -366,12 +323,11 @@ def engineering_flags(cfg=None) -> dict:
     return flags
 
 
-def _name_content_pairs(pdf_sources) -> list:
-    """Accept both (name, kind, pair_key, bytes) and (name, bytes) sources."""
-    pairs = []
-    for item in pdf_sources:
-        pairs.append((item[0], item[-1]))
-    return pairs
+def _source_parts(item):
+    """Return (name, bytes, optional pre-routed workbook)."""
+    if len(item) >= 3 and isinstance(item[2], RoutedWorkbook):
+        return item[0], item[1], item[2]
+    return item[0], item[-1], None
 
 
 def engineering_findings(pdf_sources, cfg=None) -> list:
@@ -403,7 +359,8 @@ _SEVERITY = {'info': 0, 'warning': 1, 'error': 2}
 
 def _finding_designator(finding):
     text = ' '.join(str(finding.get(key) or '') for key in ('message', 'location'))
-    values = sorted({normalized(match.group(0)) for match in current_tag().finditer(text)})
+    values = sorted({normalized(match.group(0))
+                     for match in universal_reference_tag().finditer(text)})
     return ';'.join(values)
 
 
@@ -425,7 +382,15 @@ def deduplicate_findings(findings):
         # Empty designators cannot prove semantic overlap across rule codes.
         if not designator:
             group = code
-        key = (group, designator, _finding_source_pair(finding))
+        if designator:
+            key = (group, designator, _finding_source_pair(finding))
+        else:
+            # Same-code findings in one document may describe different rows.
+            # Without a designation, collapse exact duplicates only.
+            key = (code, '', _finding_source_pair(finding),
+                   str(finding.get('location') or ''),
+                   str(finding.get('message') or ''),
+                   str(finding.get('recommendation') or ''))
         if key not in positions:
             positions[key] = len(output)
             output.append(finding)
@@ -443,7 +408,8 @@ def deduplicate_findings(findings):
 
 def _model_summary(model, sources):
     by_source = {}
-    for name, _content in sources:
+    normalized_sources = [_source_parts(item) for item in sources]
+    for name, _content, _routed in normalized_sources:
         by_source[name] = {'scheme_mentions': 0, 'spec_rows': 0,
                            'document_refs': 0, 'connections': 0}
     for mention in model.scheme_mentions:
@@ -460,12 +426,50 @@ def _model_summary(model, sources):
     for record in model.connections:
         by_source.setdefault(record.document, {}).setdefault('connections', 0)
         by_source[record.document]['connections'] += 1
-    xlsx_uploaded = any(_Path(name).suffix.casefold() == '.xlsx' for name, _ in sources)
+    xlsx_uploaded = any(_Path(name).suffix.casefold() == '.xlsx'
+                        for name, _content, _routed in normalized_sources)
+    devices = []
+    for key in sorted(model.devices)[:20]:
+        device = model.devices[key]
+        raw = getattr(getattr(device, 'designation', None), 'raw', None) or key
+        devices.append({'designation': raw})
+    spec_rows = []
+    for row in model.spec_rows[:20]:
+        spec_rows.append({
+            'document': row.provenance.document if row.provenance else '',
+            'row': row.provenance.row if row.provenance else None,
+            'designation': row.raw_text,
+            'quantity': row.quantity,
+            'name': row.name,
+        })
+    connections = []
+    for name, _content, routed in normalized_sources:
+        if routed is None:
+            continue
+        for sheet in routed.sheets_for('connections'):
+            for row in sheet.records:
+                connections.append({
+                    'document': name, 'sheet': sheet.name, 'row': row.get('_row_number'),
+                    'source': f"{row.get('source_device') or ''}:{row.get('source_terminal') or ''}",
+                    'target': f"{row.get('target_device') or ''}:{row.get('target_terminal') or ''}",
+                    'wire': row.get('wire') or '', 'cable': row.get('cable') or '',
+                    'color': row.get('color') or '',
+                    'cross_section': row.get('cross_section') or '',
+                })
+                if len(connections) >= 20:
+                    break
+            if len(connections) >= 20:
+                break
+        if len(connections) >= 20:
+            break
     return {
+        'devices': len(model.devices),
         'scheme_mentions': len(model.scheme_mentions),
         'spec_rows': len(model.spec_rows),
         'document_refs': len(model.document_refs),
         'connections': len(model.connections),
+        'preview': {'devices': devices, 'pe3_rows': spec_rows,
+                    'connections': connections},
         'by_source': by_source,
         'metadata': {
             'xlsx_uploaded': xlsx_uploaded,
@@ -476,15 +480,14 @@ def _model_summary(model, sources):
 
 
 def engineering_analysis(sources, cfg=None):
-    pairs = _name_content_pairs(sources)
     if not engineering_flags(cfg)['engineering_model_checks']:
         empty = EngineeringModel()
-        return [], _model_summary(empty, pairs)
-    model = build_model(pairs)
+        return [], _model_summary(empty, sources)
+    model = build_model(sources)
     findings = (list(getattr(model, 'adapter_diagnostics', []))
                 + list(run_verifiers(model)) + list(run_universal_verifiers(model))
                 + list(run_graph_verifiers(model)))
-    return findings, _model_summary(model, pairs)
+    return findings, _model_summary(model, sources)
 
 
 def apply_engineering_findings(issues, pdf_sources, cfg, *, return_summary=False):
@@ -498,8 +501,8 @@ def apply_engineering_findings(issues, pdf_sources, cfg, *, return_summary=False
         findings, summary = engineering_analysis(pdf_sources, cfg)
     except Exception as exc:  # noqa: BLE001
         findings = [_em000('построение инженерной модели', '', exc)]
-        summary = _model_summary(EngineeringModel(), _name_content_pairs(pdf_sources))
+        summary = _model_summary(EngineeringModel(), pdf_sources)
     if engineering_flags(cfg)['engineering_model_replace_legacy']:
         issues = [i for i in issues if i.get('code') not in LEGACY_CODES]
-    combined = deduplicate_findings(list(issues) + findings)
+    combined = list(issues) + findings
     return (combined, summary) if return_summary else combined
