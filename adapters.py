@@ -470,30 +470,29 @@ def _dedup_identity(finding):
     return None
 
 
-def _shared_conflict(current, incoming):
-    # Explicit evidence and concrete source references must agree. A common
-    # entity or page alone does not establish two different messages as duplicates.
+def _shared_conflict(current, incoming, identity):
+    same_message = current.get('message') == incoming.get('message')
+    same_file = current.get('file') == incoming.get('file')
     left, right = _finding_refs(current), _finding_refs(incoming)
     shared = any(ref in right for ref in left)
-    explicit_left = current.get('source_refs') or []
-    explicit_right = incoming.get('source_refs') or []
-    explicit_shared = any(ref in explicit_right for ref in explicit_left)
-    evidence = current.get('evidence')
-    same_evidence = bool(evidence) and evidence == incoming.get('evidence')
-    same_message = current.get('message') == incoming.get('message')
-    same_location = bool(current.get('file') and current.get('location')) and (
-        current.get('file'), current.get('location')) == (
-        incoming.get('file'), incoming.get('location'))
-    if explicit_left and explicit_right and not explicit_shared:
-        return False
-    if current.get('code') == incoming.get('code') and not same_message:
-        return False
-    return (same_message and (shared or same_location)) or (
-        (explicit_shared or same_evidence) and shared)
+    if not identity:
+        return same_message and same_file and current.get('location') == incoming.get('location')
+    family, _ = identity
+    if family == 'terminal_conflict':
+        # A terminal may participate in several independent defects.
+        return same_message and same_file and (shared or left == right)
+    if family == 'missing_set_document':
+        # Additive legacy and engineering diagnostics can describe different
+        # obligations for the same referenced document. Only identical claims
+        # are interchangeable; repeated locations are collected as evidence.
+        return same_message and (same_file or shared)
+    # These rule families describe aggregate entity conflicts. Multiple rows,
+    # pages, counts and complementary rule messages are evidence of one card.
+    return True
 
 
-def deduplicate_findings(findings, *, preserve_legacy=None):
-    """Collapse evidenced duplicates, retaining additive legacy diagnostics."""
+def deduplicate_findings(findings):
+    """Collapse aggregate conflicts while retaining independent diagnostic claims."""
     output, positions = [], {}
     for finding in findings:
         code = str(finding.get('code') or '')
@@ -506,16 +505,7 @@ def deduplicate_findings(findings, *, preserve_legacy=None):
         index = None
         for candidate in positions.get(key, []):
             current = output[candidate]
-            legacy_pair = (current.get('code') != code and
-                           any(str(item.get('code') or '').startswith(('KD-SET-', 'KD-PE-'))
-                               for item in (current, incoming)))
-            # An already finalized additive result must remain idempotent
-            # when passed to the public helper without configuration.
-            finalized = all(item.get('canonical_type') for item in (current, finding))
-            if legacy_pair and (preserve_legacy is True or
-                                (preserve_legacy is None and finalized)):
-                continue
-            if current == incoming or _shared_conflict(current, incoming):
+            if current == incoming or _shared_conflict(current, incoming, identity):
                 index = candidate
                 break
         if index is None:

@@ -21,7 +21,7 @@ from issue_tracking import MAX_COMMENT, validate_decision
 from excel_reports import build_excel_report
 from set_completeness import unpaired_document_findings
 from full_set_completeness import full_set_findings
-from adapters import apply_engineering_findings, deduplicate_findings, engineering_flags
+from adapters import apply_engineering_findings, deduplicate_findings
 from connection_import import route_xlsx
 from build_metadata import build_metadata
 from document_identity import pdf_identity_findings, unique_pdf_analysis_sources
@@ -190,8 +190,7 @@ async def check(files: list[UploadFile] = File(...)):
     for err in errors:
         issues.append({"severity":"error", "code":"KD-000", "file":err["file"], "location":"Загрузка", "message":err["message"], "recommendation":"Предоставьте корректный файл поддерживаемого формата"})
     # Canonical cards are finalized before persistence and response counts.
-    issues = deduplicate_findings(
-        issues, preserve_legacy=not engineering_flags(cfg)['engineering_model_replace_legacy'])
+    issues = deduplicate_findings(issues)
     # Every new check independently retrieves the current checklist when configured.
     # No stale snapshot can silently be reused if the upstream is unavailable.
     checklist = current_checklist_state()
