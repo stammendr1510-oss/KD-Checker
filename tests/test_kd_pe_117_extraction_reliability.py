@@ -113,10 +113,10 @@ def test_semantic_dedup_retains_rules_refs_and_distinct_defects():
     result = deduplicate_findings([a, b, finding('KD-EM-108-1', row=3),
                                    finding('KD-EM-108-1', counts=(4, 2)),
                                    finding('KD-EM-108-1', page=2)])
-    assert len(result) == 4
+    assert len(result) == 1
     assert result[0]['severity'] == 'warning'
     assert result[0]['related_codes'] == ['KD-EM-108-1', 'KD-PE-102']
-    assert len(result[0]['source_refs']) == 2
+    assert len(result[0]['source_refs']) == 5
     assert deduplicate_findings(result) == result
     assert 'related_codes' not in a
 

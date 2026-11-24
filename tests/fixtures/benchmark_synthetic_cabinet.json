@@ -1,0 +1,64 @@
+{
+  "expected_devices": [
+    "BL2",
+    "GX3",
+    "VR1"
+  ],
+  "expected_pe3_rows": [
+    {
+      "designation": "VR1",
+      "quantity": 1,
+      "name": "Relay 24VDC"
+    },
+    {
+      "designation": "VR1",
+      "quantity": 1,
+      "name": "Relay 230VAC"
+    },
+    {
+      "designation": "BL2",
+      "quantity": 1,
+      "name": "Module"
+    },
+    {
+      "designation": "GX3",
+      "quantity": 1,
+      "name": "Switch"
+    }
+  ],
+  "expected_connections": [
+    {
+      "source": "VR1:1",
+      "target": "BL2:2",
+      "wire": "W1"
+    },
+    {
+      "source": "VR1:1",
+      "target": "GX3:3",
+      "wire": "W2"
+    }
+  ],
+  "expected_defects": [
+    {
+      "canonical_type": "parameter_conflict",
+      "target_entity": "VR1",
+      "min_severity": "WARNING"
+    },
+    {
+      "canonical_type": "terminal_conflict",
+      "target_entity": "VR1:1",
+      "min_severity": "WARNING"
+    },
+    {
+      "canonical_type": "confusable_model",
+      "target_entity": "BL-01|BL-O1",
+      "min_severity": "INFO"
+    },
+    {
+      "canonical_type": "missing_set_document",
+      "target_entity": "SYNTH-77Э3",
+      "min_severity": "WARNING"
+    }
+  ],
+  "forbidden_false_positives": []
+}

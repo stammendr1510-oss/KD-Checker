@@ -188,6 +188,7 @@ async def check(files: list[UploadFile] = File(...)):
             confidence_limits=['Документ не прочитан; количество строк неизвестно']))
     for err in errors:
         issues.append({"severity":"error", "code":"KD-000", "file":err["file"], "location":"Загрузка", "message":err["message"], "recommendation":"Предоставьте корректный файл поддерживаемого формата"})
+    # Canonical cards are finalized before persistence and response counts.
     issues = deduplicate_findings(issues)
     # Every new check independently retrieves the current checklist when configured.
     # No stale snapshot can silently be reused if the upstream is unavailable.
