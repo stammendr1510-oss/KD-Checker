@@ -488,10 +488,9 @@ def _shared_conflict(current, incoming, identity):
         # A terminal may participate in several independent defects.
         return same_message and same_file and (shared or left == right)
     if family == 'missing_set_document':
-        # Additive legacy and engineering diagnostics can describe different
-        # obligations for the same referenced document. Only identical claims
-        # are interchangeable; repeated locations are collected as evidence.
-        return same_message and (same_file or shared)
+        # Preserve different rule obligations at the additive seam, but
+        # collapse repeated notices within a rule across source documents.
+        return same_message or current.get('code') == incoming.get('code')
     # These rule families describe aggregate entity conflicts. Multiple rows,
     # pages, counts and complementary rule messages are evidence of one card.
     return True
