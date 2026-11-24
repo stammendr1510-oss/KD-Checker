@@ -19,6 +19,7 @@ from naming import (  # noqa: F401
     _notation_part,
     DEFAULT_CLASS_PREFIX,
     RANGE,
+    DOTTED_RANGE,
     TAG_PREFIX,  # kept as the historical default class prefix
     configure_reference_classes,
     current_tag,
@@ -190,7 +191,10 @@ def _duplicate_range_spelling_is_exact(notation):
     # The legacy range expander converts numbers to int. For duplicate evidence
     # do not equate a padded source like KM01...KM03 with a separate KM1.
     for part in notation.split(';'):
-        match = RANGE.fullmatch(_notation_part(part) or '')
+        cleaned = _notation_part(part) or ''
+        if DOTTED_RANGE.fullmatch(cleaned):
+            return False  # conservative: no duplicate proof from dotted ranges
+        match = RANGE.fullmatch(cleaned)
         if match:
             _, first, _, last = match.groups()
             if str(int(first)) != first or str(int(last)) != last:

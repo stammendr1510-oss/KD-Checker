@@ -53,12 +53,17 @@ class Connection:
     target: Endpoint
     document: str
     location: str
+    bus_or_block_ref: str = ''
+    color: str = ''
+    cross_section: str = ''
+    wire_type: str = ''
 
     def __post_init__(self):
         if not isinstance(self.source, Endpoint) or not isinstance(self.target, Endpoint):
             raise ValueError('Explicit device and terminal required at both ends')
-        for name in ('project', 'revision', 'wire', 'cable', 'document', 'location'):
-            object.__setattr__(self, name, _text(getattr(self, name), optional=name == 'cable'))
+        optional = ('cable', 'bus_or_block_ref', 'color', 'cross_section', 'wire_type')
+        for name in ('project', 'revision', 'wire', 'document', 'location') + optional:
+            object.__setattr__(self, name, _text(getattr(self, name), optional=name in optional))
 
 
 def check_connections(records):

@@ -138,6 +138,7 @@ def model_from_spec_rows(rows, filename: str, model: EngineeringModel | None = N
             model.pe3_model_tokens.setdefault(token, set()).add(ref)
         prev_designations = [d.raw for d in des] or prev_designations
         prev_has_band = r.get('row_band') is not None
+    model.reconcile_connection_groups()
     return model
 
 
@@ -153,6 +154,7 @@ def model_from_scheme(pdf_bytes: bytes, filename: str, model: EngineeringModel |
                 model.add_device(des, ref)
             for token in model_tokens(page.get_text()):
                 model.e3_model_tokens.setdefault(token, set()).add(ref)
+    model.reconcile_connection_groups()
     return model
 
 
@@ -177,6 +179,7 @@ def attach_upload_identities(names, model: EngineeringModel) -> EngineeringModel
 def attach_connections(records, model: EngineeringModel) -> EngineeringModel:
     """Bridge validated structured connection records (connection_checks)."""
     model.connections.extend(records)
+    model.reconcile_connection_groups()
     return model
 
 
@@ -221,6 +224,7 @@ def model_from_xlsx(content: bytes, filename: str,
                     model.document_refs.append(DocumentRef(
                         kind=kind, key=pair_key(raw), raw=raw,
                         provenance=source_ref(filename, row=record['_row_number'])))
+    model.reconcile_connection_groups()
     return model
 
 
@@ -285,6 +289,7 @@ def build_model(pdf_sources, names=None) -> EngineeringModel:
                             model.scheme_mentions.append(SchemeMention(designation=des, provenance=ref))
                             model.add_device(des, ref)
                             parsed_counts[name] = parsed_counts.get(name, 0) + 1
+    model.reconcile_connection_groups()
     # Extraction-gap diagnostics: a recognized engineering document that
     # produced zero model entities means the analysis is incomplete.
     for name, count in parsed_counts.items():

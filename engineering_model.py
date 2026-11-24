@@ -6,7 +6,8 @@ configuration, never from per-class special cases.
 """
 from __future__ import annotations
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from engineering_classifier import classify_object, split_cable_reference
 
 from connection_checks import Connection
 from engine import issue
@@ -184,6 +185,30 @@ class EngineeringModel:
     # mapped to every place they were seen. Universal confusable check input.
     e3_model_tokens: dict = field(default_factory=dict)   # token -> set[SourceRef]
     pe3_model_tokens: dict = field(default_factory=dict)  # token -> set[SourceRef]
+
+    def object_kinds(self):
+        """Derive kinds from all currently loaded PE3/E3 and endpoint evidence."""
+        kinds = {key: 'device' for key in self.devices}
+        for connection in self.connections:
+            for end in (connection.source, connection.target):
+                kinds.setdefault(normalized(end.device), 'potential_bus' if end.kind == 'potential' else 'device')
+        for row in self.spec_rows:
+            for des in row.designations:
+                kind = classify_object(des.raw, description=row.name,
+                                       parent_ref=row.parent_ref, role=row.row_role)
+                if kind and (kind != 'device' or des.normalized not in kinds):
+                    kinds[des.normalized] = kind
+        return kinds
+
+    def reconcile_connection_groups(self):
+        """Reclassify after all documents arrive; upload order is immaterial."""
+        kinds = self.object_kinds()
+        self.connections[:] = [
+            replace(record, cable=cable, bus_or_block_ref=block or record.bus_or_block_ref)
+            for record in self.connections
+            for cable, block in [split_cable_reference(
+                record.cable, kinds, endpoints=(record.source, record.target))]
+        ]
 
     def add_device(self, des: Designation, ref: SourceRef):
         dev = self.devices.get(des.normalized)
