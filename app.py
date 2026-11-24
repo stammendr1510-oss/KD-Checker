@@ -21,7 +21,7 @@ from issue_tracking import MAX_COMMENT, validate_decision
 from excel_reports import build_excel_report
 from set_completeness import unpaired_document_findings
 from full_set_completeness import full_set_findings
-from adapters import apply_engineering_findings, deduplicate_findings
+from adapters import apply_engineering_findings, deduplicate_findings, engineering_flags
 from connection_import import route_xlsx
 from build_metadata import build_metadata
 from document_identity import pdf_identity_findings, unique_pdf_analysis_sources
@@ -138,7 +138,8 @@ async def check(files: list[UploadFile] = File(...)):
             await uploaded.close()
     if not docs and not errors:
         raise HTTPException(400, "Выберите файлы")
-    issues = analyze(legacy_docs, load_cfg())
+    cfg = load_cfg()
+    issues = analyze(legacy_docs, cfg)
     issues.extend(full_set_findings(full_set_sources,
                   [error["file"] for error in errors if error["file"].casefold().endswith(".pdf")]))
     issues.extend(unpaired_document_findings([name for name, _, _, _ in pdf_sources]))
@@ -164,7 +165,7 @@ async def check(files: list[UploadFile] = File(...)):
     # the engineering model; designation-typed pairs alone would leave
     # document-reference checks (KD-EM-108-2) without any model to verify.
     issues, extracted_entities = apply_engineering_findings(
-        issues, engineering_sources, load_cfg(), return_summary=True,
+        issues, engineering_sources, cfg, return_summary=True,
         uploaded_names=[d.name for d in docs] + [e['file'] for e in errors])
     # Account for every upload, including formats outside the engineering seam.
     observed_names = {item['document'] for item in extracted_entities.get('documents', [])}
@@ -189,7 +190,8 @@ async def check(files: list[UploadFile] = File(...)):
     for err in errors:
         issues.append({"severity":"error", "code":"KD-000", "file":err["file"], "location":"Загрузка", "message":err["message"], "recommendation":"Предоставьте корректный файл поддерживаемого формата"})
     # Canonical cards are finalized before persistence and response counts.
-    issues = deduplicate_findings(issues)
+    issues = deduplicate_findings(
+        issues, preserve_legacy=not engineering_flags(cfg)['engineering_model_replace_legacy'])
     # Every new check independently retrieves the current checklist when configured.
     # No stale snapshot can silently be reused if the upstream is unavailable.
     checklist = current_checklist_state()

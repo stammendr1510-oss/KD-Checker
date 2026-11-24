@@ -456,22 +456,72 @@ def _finding_refs(finding):
     return refs
 
 
-def deduplicate_findings(findings):
-    """Collapse known semantic conflicts; never guess an unresolved identity."""
+def _dedup_identity(finding):
+    identity = _canonical_identity(finding)
+    if identity:
+        return identity
+    # Older quantity diagnostics did not quote their designator.
+    if _CANONICAL_RULE_GROUPS.get(finding.get('code')) == 'quantity_mismatch':
+        message = str(finding.get('message') or '')
+        if '«' not in message:
+            values = {_entity_text(m.group(0)) for m in universal_reference_tag().finditer(message)}
+            if len(values) == 1:
+                return 'quantity_mismatch', values.pop()
+    return None
+
+
+def _shared_conflict(current, incoming):
+    # Explicit evidence and concrete source references must agree. A common
+    # entity or page alone does not establish two different messages as duplicates.
+    left, right = _finding_refs(current), _finding_refs(incoming)
+    shared = any(ref in right for ref in left)
+    explicit_left = current.get('source_refs') or []
+    explicit_right = incoming.get('source_refs') or []
+    explicit_shared = any(ref in explicit_right for ref in explicit_left)
+    evidence = current.get('evidence')
+    same_evidence = bool(evidence) and evidence == incoming.get('evidence')
+    same_message = current.get('message') == incoming.get('message')
+    same_location = bool(current.get('file') and current.get('location')) and (
+        current.get('file'), current.get('location')) == (
+        incoming.get('file'), incoming.get('location'))
+    if explicit_left and explicit_right and not explicit_shared:
+        return False
+    if current.get('code') == incoming.get('code') and not same_message:
+        return False
+    return (same_message and (shared or same_location)) or (
+        (explicit_shared or same_evidence) and shared)
+
+
+def deduplicate_findings(findings, *, preserve_legacy=None):
+    """Collapse evidenced duplicates, retaining additive legacy diagnostics."""
     output, positions = [], {}
     for finding in findings:
         code = str(finding.get('code') or '')
-        identity = _canonical_identity(finding)
+        identity = _dedup_identity(finding)
         key = ('canonical', *identity) if identity else (
             'exact', code, finding.get('file'), finding.get('location'), finding.get('message'))
         incoming = dict(finding)
         if identity:
             incoming['canonical_type'], incoming['target_entity'] = identity
-        if key not in positions:
-            positions[key] = len(output)
+        index = None
+        for candidate in positions.get(key, []):
+            current = output[candidate]
+            legacy_pair = (current.get('code') != code and
+                           any(str(item.get('code') or '').startswith(('KD-SET-', 'KD-PE-'))
+                               for item in (current, incoming)))
+            # An already finalized additive result must remain idempotent
+            # when passed to the public helper without configuration.
+            finalized = all(item.get('canonical_type') for item in (current, finding))
+            if legacy_pair and (preserve_legacy is True or
+                                (preserve_legacy is None and finalized)):
+                continue
+            if current == incoming or _shared_conflict(current, incoming):
+                index = candidate
+                break
+        if index is None:
+            positions.setdefault(key, []).append(len(output))
             output.append(incoming)
             continue
-        index = positions[key]
         current = output[index]
         winner = (incoming if _SEVERITY.get(str(incoming.get('severity')).lower(), -1) >
                   _SEVERITY.get(str(current.get('severity')).lower(), -1) else current)
