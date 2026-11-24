@@ -261,7 +261,7 @@ def _name_content_pairs(pdf_sources) -> list:
     return pairs
 
 
-def engineering_findings(pdf_sources, cfg=None) -> list[dict]:
+def engineering_findings(pdf_sources, cfg=None) -> list:
     """Build the model from uploaded PDFs and run EM-108/EM-109/EM-110 verifiers.
 
     pdf_sources: (name, kind, pair_key, bytes) or (name, bytes). ALL uploaded
@@ -280,7 +280,7 @@ def engineering_findings(pdf_sources, cfg=None) -> list[dict]:
         return [_em000('построение инженерной модели', '', exc)]
 
 
-def apply_engineering_findings(issues, pdf_sources, cfg) -> list[dict]:
+def apply_engineering_findings(issues, pdf_sources, cfg) -> list:
     """Append KD-EM-* findings to an existing issue list (pure function).
 
     Strictly additive by default. Only when the explicit opt-in
